@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Avalon Online</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>DeepSeek Quest</h1>
+        <div class="user-stats">
+            <h3>Welcome, {{ user.username }}</h3>
+            <div class="stats-container">
+                <div class="blue-stats">
+                    <h4>Blue Team Stats</h4>
+                    <p>Wins: {{ user.blue_wins }}</p>
+                    <p>Losses: {{ user.blue_losses }}</p>
+                    <p>Win Rate: {{ user.blue_winrate }}%</p>
+                </div>
+                <div class="red-stats">
+                    <h4>Red Team Stats</h4>
+                    <p>Wins: {{ user.red_wins }}</p>
+                    <p>Losses: {{ user.red_losses }}</p>
+                    <p>Win Rate: {{ user.red_winrate }}%</p>
+                </div>
+            </div>
+            <a href="{{ url_for('logout') }}" class="logout-btn">Logout</a>
+        </div>
+        <div id="rules-section">
+            <button onclick="toggleRules()" class="rules-button">游戏规则</button>
+            <div id="rules-content" class="rules-modal" style="display: none;">
+                <div class="rules-modal-content">
+                    <span class="close-button" onclick="toggleRules()">&times;</span>
+                    <h2>游戏规则</h2>
+                    <div class="rules-text">
+                        <游戏规则: 目前游戏是Quest的一个最简单的实现。3好2坏，没有特殊角色，五局三胜，第四局需要两张坏票。队长直接指定团队无需投票。坏人有可能会装好人投好票，好人只能投好票。>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="game-controls">
+            <button onclick="startGame()">Start New Game</button>
+            {% if user and user.is_admin %}
+            <button onclick="startTestGame()" class="test-button">Start Test Game</button>
+            <div class="test-options">
+                <label>
+                    <input type="checkbox" id="p5-morgan-checkbox" onchange="updateTestOptions()">
+                    将P5设为摩根
+                </label>
+            </div>
+            <div class="model-select">
+                <label for="model-choice">选择模型:</label>
+                <select id="model-choice" onchange="changeModel(this.value)">
+                    <option value="chatgpt">OpenAI</option>
+                    <option value="ollama-32b">Ollama (DeepSeek-32B)</option>
+                    <option value="ollama-7b">Ollama (DeepSeek-7B)</option>
+                    <option value="glm-zero">GLM Zero</option>
+                    <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+                    <option value="doubao-lite">Doubao Lite 32K</option>
+                    <option value="siliconflow">SiliconFlow</option>
+                </select>
+            </div>
+            <div class="export-controls">
+                <button onclick="exportData('excel')" class="export-button">Export to Excel</button>
+                <button onclick="exportData('training')" class="export-button">Export Training Data</button>
+            </div>
+            {% endif %}
+        </div>
+        <div id="messages" class="log-container"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+    const socket = io();
+
+    // 添加连接状态监听
+    socket.on('connect', () => {
+        console.log('Connected to server');
+    });
+
+    socket.on('disconnect', () => {
+        console.log('Disconnected from server');
+    });
+
+    socket.on('connect_error', (error) => {
+        console.error('Connection error:', error);
+    });
+
+    socket.on('error', (error) => {
+        console.error('Socket error:', error);
+    });
+
+    socket.on('game_update', function(data) {
+        try {
+            console.log('Received game update:', data);  // 调试信息
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${data.type}`;
+            messageDiv.textContent = data.message;
+            
+            // 如果是输入提示，显示输入框
+            if (data.type === 'input_prompt') {
+                const inputForm = document.createElement('form');
+                const inputField = document.createElement('input');
+                const submitButton = document.createElement('button');
+                
+                inputField.type = 'text';
+                submitButton.textContent = '提交';
+                
+                inputForm.onsubmit = function(e) {
+                    e.preventDefault();
+                    const input = inputField.value;
+                    console.log('Sending player input:', input);  // 调试信息
+                    socket.emit('player_input', { input: input });
+                    inputField.value = '';
+                    inputForm.style.display = 'none';
+                };
+                
+                inputForm.appendChild(inputField);
+                inputForm.appendChild(submitButton);
+                messageDiv.appendChild(inputForm);
+            }
+            
+            const messagesDiv = document.getElementById('messages');
+            if (messagesDiv) {
+                messagesDiv.appendChild(messageDiv);
+                messageDiv.scrollIntoView();
+            } else {
+                console.error('Messages container not found');
+            }
+        } catch (error) {
+            console.error('Error handling game update:', error);
+        }
+    });
+
+    function startGame() {
+        try {
+            console.log('Starting game...');  // 调试信息
+            socket.emit('start_game');
+        } catch (error) {
+            console.error('Error starting game:', error);
+        }
+    }
+
+    function toggleRules() {
+        const rulesContent = document.getElementById('rules-content');
+        if (rulesContent.style.display === 'none') {
+            rulesContent.style.display = 'block';
+        } else {
+            rulesContent.style.display = 'none';
+        }
+    }
+
+    function startTestGame() {
+        console.log('Starting test game...');
+        try {
+            const p5IsMorgan = document.getElementById('p5-morgan-checkbox').checked;
+            console.log('P5 is morgan:', p5IsMorgan);  // 添加调试日志
+            socket.emit('start_test_game', { p5_is_morgan: p5IsMorgan });
+        } catch (error) {
+            console.error('Error starting test game:', error);
+        }
+    }
+
+    function updateTestOptions() {
+        const checkbox = document.getElementById('p5-morgan-checkbox');
+        console.log('Test options updated:', { p5_is_morgan: checkbox.checked });
+    }
+
+    function exportData(format) {
+        fetch(`/export/${format}`)
+            .then(response => {
+                if (format === 'excel') {
+                    return response.blob();
+                } else {
+                    return response.json();
+                }
+            })
+            .then(data => {
+                if (format === 'excel') {
+                    // 下载 Excel 文件
+                    const url = window.URL.createObjectURL(data);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'avalon_game_data.xlsx';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    // 下载 JSON 训练数据
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'avalon_training_data.json';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                }
+            })
+            .catch(error => console.error('Error exporting data:', error));
+    }
+
+    function changeModel(model) {
+        fetch('/change_model', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ model: model })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                console.log('Model changed successfully');
+                // 重新初始化游戏
+                socket.emit('start_game');
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    }
+    </script>
+</body>
+</html>
+

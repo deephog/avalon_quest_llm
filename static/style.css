@@ -1,0 +1,295 @@
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    max-width: 800px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #1a1a1a;
+    color: #e0e0e0;
+}
+
+.container {
+    background-color: #2a2a2a;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 0 15px rgba(0,0,0,0.3);
+}
+
+h1 {
+    color: #4CAF50;
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+#game-controls {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+button:disabled {
+    background-color: #666;
+    cursor: not-allowed;
+}
+
+.log-container {
+    background-color: #f5f5f5;
+    border-radius: 5px;
+    padding: 15px;
+    min-height: 400px;
+    max-height: 600px;
+    overflow-y: auto;
+    margin-bottom: 20px;
+    border: 1px solid #ddd;
+}
+
+.log-message {
+    padding: 8px 12px;
+    margin: 5px 0;
+    border-radius: 4px;
+    background-color: #404040;
+}
+
+.log-time {
+    color: #888;
+    font-size: 0.9em;
+    margin-right: 10px;
+}
+
+.action-message {
+    border-left: 4px solid #2196F3;
+    background-color: #2d2d2d;
+}
+
+.result-message {
+    border-left: 4px solid #FF9800;
+    background-color: #332900;
+}
+
+#input-section {
+  display: flex !important; /* 强制显示 */
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  right: 20px;
+  z-index: 9999;
+  background: #333;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+#player-input {
+    flex-grow: 1;
+    padding: 10px;
+    background-color: #333;
+    border: 1px solid #444;
+    color: #fff;
+    border-radius: 4px;
+}
+
+#send-button {
+    padding: 10px 20px;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#send-button:hover {
+    background-color: #45a049;
+}
+
+.message {
+    margin: 10px;
+    padding: 10px;
+    border-radius: 5px;
+    color: #333;
+}
+
+.info {
+    background-color: #ffffff;
+    border-left: 4px solid #4CAF50;
+}
+
+.action {
+    background-color: #e3f2fd;
+    border-left: 4px solid #2196F3;
+}
+
+.result {
+    background-color: #ffeeff;
+    border-left: 4px solid #ff4081;
+    font-weight: bold;
+}
+
+.input_prompt {
+    background-color: #f1f8e9;
+    border-left: 4px solid #8bc34a;
+}
+
+form {
+    margin-top: 10px;
+}
+
+input[type="text"] {
+    width: 80%;
+    padding: 5px;
+    margin-right: 10px;
+}
+
+button {
+    padding: 5px 10px;
+}
+
+.rules-button {
+    background-color: #2196F3;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-bottom: 20px;
+}
+
+.rules-button:hover {
+    background-color: #1976D2;
+}
+
+.rules-modal {
+    display: none;
+    position: fixed;
+    z-index: 1;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.4);
+}
+
+.rules-modal-content {
+    background-color: #fefefe;
+    margin: 15% auto;
+    padding: 20px;
+    border: 1px solid #888;
+    width: 80%;
+    max-width: 600px;
+    border-radius: 5px;
+    position: relative;
+}
+
+.close-button {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.close-button:hover {
+    color: black;
+}
+
+.rules-text {
+    color: #333;
+    line-height: 1.6;
+    margin-top: 20px;
+}
+
+.test-button {
+    background-color: #ff9800;
+    margin-left: 10px;
+}
+
+.test-button:hover {
+    background-color: #f57c00;
+}
+
+.export-controls {
+    margin-top: 10px;
+}
+
+.export-button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 5px;
+}
+
+.export-button:hover {
+    background-color: #45a049;
+}
+
+.stats-container {
+    display: flex;
+    justify-content: space-around;
+    margin: 20px 0;
+}
+
+.blue-stats, .red-stats {
+    background-color: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.blue-stats h4 {
+    color: #4a90e2;
+}
+
+.red-stats h4 {
+    color: #e24a4a;
+}
+
+.model-select {
+    margin: 15px 0;
+    text-align: center;
+}
+
+.model-select select {
+    padding: 8px;
+    border-radius: 4px;
+    background-color: #333;
+    color: #fff;
+    border: 1px solid #444;
+    margin-left: 10px;
+}
+
+.model-select label {
+    color: #e0e0e0;
+}
+
+.test-options {
+    margin: 10px 0;
+    padding: 5px;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+.test-options label {
+    color: #e0e0e0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.test-options input[type="checkbox"] {
+    margin: 0;
+}
