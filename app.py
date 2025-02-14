@@ -65,8 +65,8 @@ class GameManager:
     def __init__(self):
         self.reset_game()
         self.output = WebSocketOutput(socketio, self)
-        self.current_user = None  # 添加当前用户属性
-        print("GameManager initialized")  # 调试信息
+        self.current_user = None
+        print("GameManager initialized")
 
     def reset_game(self):
         self.game = None
@@ -76,14 +76,18 @@ class GameManager:
         self.current_round = 0
         self.output = WebSocketOutput(socketio, self)
 
-    def run_game(self, test_mode=False, p5_is_morgan=False):
-        print("Game started")  # 调试信息
-        with app.app_context():  # 创建应用上下文
-            if not self.game:  # 如果游戏还没有初始化
-                self.game = AvalonSimulator(output=self.output, test_mode=test_mode)
+    def run_game(self, test_mode=False, p5_is_morgan=False, player_models=None):
+        print("Game started")
+        with app.app_context():
+            if not self.game:
+                self.game = AvalonSimulator(
+                    output=self.output,
+                    player_models=player_models,
+                    test_mode=test_mode
+                )
             self.game.run_game(test_mode=test_mode, p5_is_morgan=p5_is_morgan)
-            print("Game finished")  # 调试信息
-            self.reset_game()  # 重置游戏状态
+            print("Game finished")
+            self.reset_game()
 
     def wait_for_input(self):
         """等待玩家输入"""
@@ -187,13 +191,33 @@ def handle_disconnect():
     print("Client disconnected")  # 调试信息
 
 @socketio.on('start_game')
-def handle_start_game():
+def handle_start_game(data):
+    include_human = data.get('include_human', True)
+    player_models = data.get('player_models', {})  # 获取每个玩家的模型设置
+    random_team = data.get('random_team', True)    # 获取是否随机分配队伍
+    player_teams = data.get('player_teams', {})    # 获取手动分配的队伍信息
+    
     print("Starting game")
-    print("Creating new game")  # 调试信息
-    game_manager.game = AvalonSimulator(output=game_manager.output)
-    game_thread = threading.Thread(target=lambda: game_manager.run_game(test_mode=False))
+    print("Creating new game")
+    print(f"Player models: {player_models}")  # 添加调试日志
+    print(f"Team assignment: {'random' if random_team else 'manual'}")  # 添加调试日志
+    if not random_team:
+        print(f"Player teams: {player_teams}")
+    
+    game_manager.game = AvalonSimulator(
+        output=game_manager.output,
+        human_player_id="P5" if include_human else None,
+        player_models=player_models,
+        random_team=random_team,
+        player_teams=player_teams
+    )
+    
+    game_thread = threading.Thread(target=lambda: game_manager.run_game(
+        test_mode=False,  # 确保不是测试模式
+        p5_is_morgan=False,  # 确保不是摩根模式
+        player_models=player_models
+    ))
     game_thread.start()
-    print("Game thread started")  # 调试信息
 
 @socketio.on('player_input')
 def handle_player_input(data):
@@ -202,16 +226,23 @@ def handle_player_input(data):
         game_manager.input_queue.put(data['input'])
 
 @socketio.on('start_test_game')
-def handle_start_test_game(data):
-    if not session.get('user_id'):
-        return
-    user = User.query.get(session['user_id'])
-    if not user or not user.is_admin:
-        return
-    p5_is_morgan = data.get('p5_is_morgan', False)
-    print(f"Starting test game with p5_is_morgan={p5_is_morgan}")  # 添加调试日志
-    game_thread = threading.Thread(target=lambda: game_manager.run_game(test_mode=True, p5_is_morgan=p5_is_morgan))
-    game_thread.start()
+def handle_test_game(data):
+    try:
+        p5_is_morgan = data.get('p5_is_morgan', False)
+        include_human = data.get('include_human', False)
+        print(f"Received test game request: p5_is_morgan={p5_is_morgan}, include_human={include_human}")  # 调试日志
+        
+        game = AvalonSimulator(
+            output=WebSocketOutput(socketio, game_manager),
+            test_mode=True,
+            p5_is_morgan=p5_is_morgan,
+            human_player_id="P5" if include_human else None
+        )
+        
+        game_manager.current_game = game
+        game.run_game()
+    except Exception as e:
+        print(f"Error starting test game: {e}")
 
 @app.route('/export/<format>')
 def export_data(format):
@@ -261,6 +292,14 @@ def export_data(format):
                 JOIN game_round r ON t.round_id = r.id
             """, engine)
             thoughts_df.to_excel(writer, sheet_name='AI_Thoughts', index=False)
+
+            # 身份猜测记录
+            guesses_df = pd.read_sql("""
+                SELECT r.game_id, r.round_number, g.guesser_id, g.target_id, g.guessed_role
+                FROM identity_guess g
+                JOIN game_round r ON g.round_id = r.id
+            """, engine)
+            guesses_df.to_excel(writer, sheet_name='Identity_Guesses', index=False)
 
         output.seek(0)
         return send_file(
@@ -347,6 +386,20 @@ def change_model():
     game_manager.game = AvalonSimulator(output=game_manager.output)
     
     return jsonify({'success': True})
+
+@app.route('/create_game', methods=['POST'])
+def create_game():
+    test_mode = request.form.get('test_mode') == 'true'
+    p5_is_morgan = request.form.get('p5_is_morgan') == 'true'
+    include_human = request.form.get('include_human') == 'true'
+    
+    # 创建新游戏
+    game = AvalonSimulator(
+        output=WebSocketOutput(socketio, game_manager),
+        test_mode=test_mode,
+        p5_is_morgan=p5_is_morgan,
+        human_player_id="P5" if include_human else None
+    )
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)

@@ -7,6 +7,8 @@ from langchain.schema import HumanMessage
 from langchain_ollama import OllamaLLM
 #from langchain.chat_models import ChatOpenAI
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_fireworks import ChatFireworks
 import re
 import json
 from typing import List, Dict, Optional, Set
@@ -18,6 +20,8 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask_migrate import Migrate
 #from app import db  # 导入数据库实例
+import google.generativeai as genai
+from config import Config
 
 os.environ["OPENAI_API_KEY"] = "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"
 CHARACTER = ['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
@@ -46,7 +50,8 @@ class OllamaAdapter:
 
 class Player:
     def __init__(self, player_id: str, team_mates: List[str] = None, 
-                 is_human: bool = False, output: Optional[GameOutput] = None):
+                 is_human: bool = False, output: Optional[GameOutput] = None,
+                 model_api: str = None):
         """
         初始化玩家
         Args:
@@ -61,12 +66,15 @@ class Player:
         self.is_human = is_human
         self.character = random.choice(CHARACTER)
         self.strategy = random.choice(STRATEGY)
+        self.model_api = model_api or get_model_api()  # 使用指定的模型或默认模型
+        self.llm = self._initialize_llm()
+        
+        #print(self.model_api, '\n\n\n\n\n\n\n\n\n\n\n')
         
         # 记忆系统
         self.current_memory = ConversationBufferMemory()
         self.summary_memory = "First round, no summary generated yet"
-        # 添加规则总结
-        self.rule_summary = ""  # 存储规则的总结
+        self.rules_text = ""  # 存储原始规则文本
         self.core_beliefs = {
             "confirmed_allies": [],
             "confirmed_enemies": []
@@ -79,6 +87,66 @@ class Player:
         
         self.character_role = None  # 特殊角色（如摩根勒菲）
         self.has_amulet = False  # 是否持有魔法指示物
+        self.next_speech = ""  # 存储下一轮的发言
+
+    def _initialize_llm(self):
+        """初始化该玩家专属的语言模型"""
+        try:
+            if self.model_api == 'fireworks':
+                return ChatFireworks(
+                    model_name="accounts/fireworks/models/deepseek-r1",
+                    fireworks_api_key=Config.FIREWORKS_API_KEY,
+                )
+            elif self.model_api == 'gemini':
+                return ChatOpenAI(
+                    model="gemini-2.0-flash",
+                    api_key=Config.GEMINI_API_KEY,
+                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+                )
+            
+                #ChatGoogleGenerativeAI(
+                #    model="gemini-pro",
+                #    google_api_key=Config.GEMINI_API_KEY,
+                #    convert_system_message_to_human=True
+                #)
+            elif self.model_api == 'ollama-32b':
+                return OllamaAdapter(model_name="deepseek-r1:32b", temperature=0.8)
+            elif self.model_api == 'ollama-7b':
+                return OllamaAdapter(model_name="deepseek-r1:7b", temperature=0.8)
+            elif self.model_api == 'glm-zero':
+                return ChatOpenAI(
+                    model="glm-zero-preview",
+                    api_key="sk-DhBqcMHlBY21mmQTBE7VkwHhOrjjEdF5KsrOnR3rOwXVL9Il",
+                    base_url="https://www.dmxapi.com/v1/"
+                )
+            elif self.model_api == 'deepseek-reasoner':
+                return ChatOpenAI(
+                    model="DeepSeek-R1",
+                    api_key="bd7e65cb-ddda-4b2e-89c9-3c70b0696733",
+                    base_url="https://api.sambanova.ai/v1"
+                )
+            elif self.model_api == 'doubao-lite':
+                return ChatOpenAI(
+                    model="doubao-lite-32k",
+                    api_key="sk-DhBqcMHlBY21mmQTBE7VkwHhOrjjEdF5KsrOnR3rOwXVL9Il",
+                    base_url="https://www.dmxapi.com/v1/"
+                )
+            elif self.model_api == 'siliconflow':
+                llm = ChatOpenAI(
+                    model="Pro/deepseek-ai/DeepSeek-R1",
+                    api_key="sk-ailkxszopmpfvssuabvqsqccuhsigqfqmrybfjztezsmbhjh",
+                    base_url="https://api.siliconflow.cn/v1",
+                )
+                # 测试 API 连接
+                test_response = llm([HumanMessage(content="Test connection")])
+                print(f"Siliconflow API 初始化成功: {test_response}")
+                return llm
+            else:
+                return ChatOpenAI(model='o1-mini')
+        except Exception as e:
+            print(f"LLM 初始化失败 ({self.model_api}): {str(e)}")
+            print("使用备用模型 o1-mini")
+            return ChatOpenAI(model='o1-mini')
 
     def get_guess(self):
         return self.guess
@@ -124,157 +192,168 @@ class Player:
 
     def generate_summary(self, game_state: Dict, llm) -> str:
         """生成本轮总结并存入记忆"""
-        if not game_state['last_team']:  # 如果是第一轮
-            return "First round, no summary needed."
+        # if not game_state['last_team']:  # 如果是第一轮
+        #     return "First round, no summary needed."
+        
+        game_history = game_state['game_history']
 
         if self.role == 'red':
             prompt = f"""
-                                你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前局势：
-                                - 蓝方胜利次数：{game_state['blue_wins']}
-                                - 红方胜利次数：{game_state['red_wins']}
-                                - 最新任务结果：{game_state['last_result']}
-                                - 最近这次任务的人员组成：{game_state['last_team']}
-                                - 最近这次任务的队长：{game_state['last_leader_id']}
-                                - 最近这次任务的失败票数：{game_state['last_fail_votes']}
-                                - 你的游玩策略风格: {self.strategy}
-                                提示：红方的目的是破坏任务，所以如果任务结果是"失败"，就意味着是红方赢下了一局
+                                你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
+                                
+                                {game_history}
 
-                                本轮关键信息，如果是第一轮，则玩家聊天记录为空：
+                                你自己的ID：{self.id}
+
+                                当前轮队长ID：{game_state['leader_id']}
+                                
+                                最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
                                 {self._get_current_memory()}
 
-                                历史摘要回顾：
+                                个人历史分析回顾：
                                 {self._get_summary_history()}
 
                                 游戏规则回顾：
-                                {self.rule_summary}
+                                {self.rules_text}
 
-                                请完成两个任务：
+                                你的游玩策略风格: {self.strategy}
+
+                                请完成以下两个任务：
                                 
-                                1. 分析并总结当前局势：
-                                如果你是红方玩家，请综合分析以下内容：
-                                - 评估场上的胜负局势，和你跟你队友目前在其它玩家眼中的信任度，来思考是应该执行更保守的策略（比如隐藏身份，跟随大流），还是更激进的策略
+                                一、你是红方玩家，请综合分析以下内容并以"Summary："开头输出你的分析：
+                                - 评估场上的胜负局势，组队情况，你跟你队友目前在其它玩家眼中的信任度，来思考是应该执行更保守的策略（比如隐藏身份，跟随大流），还是更激进的策略（比如质疑蓝方玩家，将局势搅浑）
                                 - 对场上的蓝队玩家逐一整理一个名单，谁更值得拉拢，应该向谁泼脏水，让他被排除在任务之外。
                                 - 对后续游戏的策略计划。
-                                
-                                2. 更新对其他玩家的身份猜测：
-                                从除了你自己ID之外的其它玩家中猜测最有可能是红方的1-2个玩家，如果没有明确的怀疑对象，可以猜测"无"。
-                                然后，针对剩下的玩家，判断他们是蓝方还是不能确定。
-                                
+                                分析时请注意以下一些规则：
+                                - 摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                                - 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，和计划后续的队长转移时，请注意这一点。
+
+                                二、 生成下一轮发言：
+                                用"NextSpeech:"开头给出一段100-200个字的发言，可以根据策略自由发挥，混淆视听，千万不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
+                                发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
+
                                 请按以下格式输出：
                                 Summary:
-                                [在这里输出500字以内的局势分析]
-                                
-                                Guess:
-                                // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
-                                {{"P1": "blue", "P2": "red", "P3": "unknown"}}
-                                 """
+                                [在这里输出500字以内的局势和策略分析]
+
+                                NextSpeech:
+                                [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，符合你的策略风格{self.strategy}和性格特点{self.character}]
+                                """
         else:
             prompt = f"""
-                    你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前局势：
-                    - 蓝方胜利次数：{game_state['blue_wins']}
-                    - 红方胜利次数：{game_state['red_wins']}
-                    - 最新任务结果：{game_state['last_result']}
-                    - 最近这次任务的人员组成：{game_state['last_team']}
-                    - 最近这次任务的队长：{game_state['last_leader_id']}
-                    - 最近这次任务的失败票数：{game_state['last_fail_votes']}
-                    - 你的游玩策略风格: {self.strategy}
+                    你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
+                    
+                    {game_history}
 
-                    提示：如果任务失败票数为1，说明队伍中只有一个红方投了失败票；如果失败票数为2，说明可能有两个红方都投了失败票
+                    你自己的ID：{self.id}
 
-                    本轮关键信息，如果是第一轮，则玩家聊天记录为空：
+                    当前轮队长ID：{game_state['leader_id']}
+
+                    最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
                     {self._get_current_memory()}
 
-                    历史摘要回顾：
+                    个人历史分析回顾：
                     {self._get_summary_history()}
 
                     游戏规则回顾：
-                    {self.rule_summary}
+                    {self.rules_text}
 
-                    对其它玩家的身份推测：
-                    {self.get_guess()}
+                    你的游玩策略风格: {self.strategy}
 
-                    如果你是蓝方玩家，请综合分析以下内容：
-                    1. 当前局的任务表现和可疑玩家, 由于游戏中蓝方（忠臣）只能投成功票，只有红方（爪牙）才有可能投出失败票，所以如果任务出现失败，那其中一定有红方混入。并且即使任务成功，也有可能有红方为了隐藏身份而投了成功票，所以不能完全对队伍成员排除嫌疑。
-                    2. 其他玩家的发言可信度分析。要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。也要尝试判断是不是有人在尝试混淆视听，尤其是质疑你是红方玩家的人，要重点关注。 
-                    3. 你当前的核心怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个，如果在没有确凿证据的情况下，也不应随便将玩家加入你的核心怀疑名单。
-                    4. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，这样轮到他们做队长的时候才会把你加入他们的队伍。
-                    4. 对后续游戏的策略计划。你的目标是要尽可能确定其它玩家的身份，来帮助你找到可以值得信任的蓝方队友，并且避开红方玩家，尽可能在后续的任务中确保只有蓝方玩家参与，保证任务的成功。
-
-                    请完成两个任务：
+                    请完成三个任务：
                     
-                    1. 分析并总结当前局势：
-                    如果你是蓝方玩家，请综合分析以下内容：
-                    1. 当前局的任务表现和可疑玩家, 由于游戏中蓝方（忠臣）只能投成功票，只有红方（爪牙）才有可能投出失败票，所以如果任务出现失败，那其中一定有红方混入。并且即使任务成功，也有可能有红方为了隐藏身份而投了成功票，所以不能完全对队伍成员排除嫌疑。
-                    2. 其他玩家的发言可信度分析。要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。也要尝试判断是不是有人在尝试混淆视听，尤其是质疑你是红方玩家的人，要重点关注。 
-                    3. 你当前的核心怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个，如果在没有确凿证据的情况下，也不应随便将玩家加入你的核心怀疑名单。
-                    4. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，这样轮到他们做队长的时候才会把你加入他们的队伍。
-                    4. 对后续游戏的策略计划。你的目标是要尽可能确定其它玩家的身份，来帮助你找到可以值得信任的蓝方队友，并且避开红方玩家，尽可能在后续的任务中确保只有蓝方玩家参与，保证任务的成功。
+                    一、 分析并总结当前局势：
+                    如果你是蓝方玩家，请综合分析以下内容，并以"Summary："开头输出你的分析：
+                    1. 根据所有以往任务表现、组队选择、队长转移、魔法指示物使用等去推理可疑玩家。
+                    2. 根据摩根勒菲的特殊能力，判断摩根勒菲是否被使用魔法，如果被使用魔法，则摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                    3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，和计划后续的队长转移时，请注意这一点。
+                    4. 其他玩家的发言可信度分析。要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。也要尝试判断是不是有人在尝试混淆视听。 
+                    5. 你当前的怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个。
+                    6. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，并带你做任务。
+                    7. 对后续游戏的策略计划。
                     
-                    2. 更新对其他玩家的身份猜测：
-                    从除了你自己ID之外的其它玩家中猜测最有可能是红方的1-2个玩家，如果没有明确的怀疑对象，可以猜测"无"。
+                    二、 更新对其他玩家的身份猜测，并以"Guess："开头输出你的猜测：
+                    从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
                     然后，针对剩下的玩家，判断他们是蓝方还是不能确定。
+                    如果当前是第一轮，信息不足的情况下，你可以不认为任何玩家是红方。
                     
+                    三、 生成下一轮发言：
+                    用"NextSpeech:"开头给出一段100-200个字的发言，相信和怀疑的目标尽可能与你的怀疑清单一致。
+                    如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
+                    发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
+
                     请按以下格式输出：
                     Summary:
-                    [在这里输出500字以内的局势分析]
+                    [在这里输出500字以内的局势和策略分析]
                     
                     Guess:
                     // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
                     {{"P1": "blue", "P2": "red", "P3": "unknown"}}
-                    """
 
-        model_api = get_model_api()
-        if model_api in ['ollama-32b', 'ollama-7b']:
+                    NextSpeech:
+                    [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
+                    """
+        if self.model_api.startswith('ollama'):
             response = llm([HumanMessage(content=prompt)]).get("content", "")
         else:
             response = llm([HumanMessage(content=prompt)]).content
+
+        #self.current_memory.clear()
 
         # 解析响应
         try:
             # 清理和标准化响应文本
             response = response.strip()
-            if "Summary:" not in response or "Guess:" not in response:
+            if "Summary:" not in response:
                 print(f"Invalid response format: {response}")
                 return response
 
-            summary_part = response.split("Summary:")[1].split("Guess:")[0].strip()
-            guess_part = response.split("Guess:")[1].strip()
+            # 提取总结部分
+            parts = response.split("Summary:")[1]
+            summary_part = parts.split("Guess:" if "Guess:" in parts else "NextSpeech:")[0].strip()
             
-            # 清理 JSON 字符串
-            guess_part = guess_part.replace("'", '"')  # 替换单引号为双引号
-            # 移除注释行
-            guess_part = '\n'.join(line for line in guess_part.split('\n') if not line.strip().startswith('//'))
-            # 移除 markdown 格式
-            guess_part = re.sub(r'```json\s*|\s*```', '', guess_part)
-            # 确保是有效的 JSON 字符串
-            if not guess_part.startswith('{'):
-                print(f"Invalid JSON format: {guess_part}")
-                return response
-            
-            guess_json = json.loads(guess_part)
-            
-            # 更新猜测表
-            red_count = sum(1 for p in guess_json if guess_json[p] == "red")
-            if red_count > 2:
-                red_players = [p for p in guess_json if guess_json[p] == "red"][:2]
-                for p in guess_json:
-                    if p not in red_players and guess_json[p] == "red":
-                        guess_json[p] = "unknown"
-            
-            # 更新 self.guess
-            for p in self.guess:
-                if p in guess_json and guess_json[p] in ["red", "blue", "unknown"]:
-                    self.guess[p] = guess_json[p]
+            # 提取下一轮发言
+            if "NextSpeech:" in response:
+                next_speech = response.split("NextSpeech:")[1].strip()
+                self.next_speech = next_speech  # 存储下一轮的发言
+
+            if self.role == 'blue':
+                # 只有蓝方需要猜测
+                guess_part = response.split("Guess:")[1].split("NextSpeech:")[0].strip()
+                
+                # 清理 JSON 字符串
+                guess_part = guess_part.replace("'", '"')
+                # 移除注释行
+                guess_part = '\n'.join(line for line in guess_part.split('\n') if not line.strip().startswith('//'))
+                # 移除 markdown 格式
+                guess_part = re.sub(r'```json\s*|\s*```', '', guess_part)
+                # 确保是有效的 JSON 字符串
+                if not guess_part.startswith('{'):
+                    print(f"Invalid JSON format: {guess_part}")
+                    return response
+                
+                guess_json = json.loads(guess_part)
+                
+                # 更新猜测表
+                red_count = sum(1 for p in guess_json if guess_json[p] == "red")
+                if red_count > 2:
+                    red_players = [p for p in guess_json if guess_json[p] == "red"][:2]
+                    for p in guess_json:
+                        if p not in red_players and guess_json[p] == "red":
+                            guess_json[p] = "unknown"
+                
+                # 更新 self.guess
+                for p in self.guess:
+                    if p in guess_json and guess_json[p] in ["red", "blue", "unknown"]:
+                        self.guess[p] = guess_json[p]
             
             self.summary_memory = summary_part
+            return response
+            
         except Exception as e:
             print(f"解析LLM响应失败：{e}\n响应内容：{response}")
-            # 保持原有的猜测不变
-            self.summary_memory = response  # 至少保存一些信息
-
-        # 清空当前轮次记忆
-        self.current_memory.clear()
-        return response
+            self.summary_memory = response
+            return response
 
     def generate_speech(self, game_state: Dict, llm) -> str:
         if self.is_human:
@@ -293,12 +372,13 @@ class Player:
                     {context}
 
                     你正在玩Quest桌游，身份是{"蓝" if self.role == "blue" else "红"}阵营的{"忠臣" if self.role == "blue" else "爪牙"}。
+                    该游戏目前是五人游戏（P1、P2、P3、P4、P5），蓝方3人，红方2人，红方其中一人是摩根勒菲，摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
                     当前任务阶段：第{game_state['round'] + 1}轮
                     当前局势：蓝方{game_state['blue_wins']}胜 / 红方{game_state['red_wins']}胜
                     当前任务队长：
                     {game_state['leader_id']}
 
-                    你的
+                    你自己的ID：{self.id}
 
                     你的怀疑清单：
                     {self.get_guess()}
@@ -329,8 +409,7 @@ class Player:
 
                     然后以Final:开头生成符合角色身份和你的人物个性{self.character}和你的游玩策略{self.strategy}的发言：
                     Final:"""
-            model_api = get_model_api()
-            if model_api in ['ollama-32b', 'ollama-7b']:
+            if self.model_api.startswith('ollama'):
                 response = llm([HumanMessage(content=prompt)]).get("content", "")
                 message = response.split("Final:")[-1].strip()[:100]
             else:
@@ -362,27 +441,27 @@ class Player:
             game_round = len(self.current_memory.load_memory_variables({})['history'].split("第")) - 1
             
             if self.role == "red":
-                if game_round == 3:  # 第四轮
-                    # 第四轮需要两个失败票，必须选择一个红队队友
-                    team_mate = next(p for p in self.team_mates if f"P{p}" != self.id)
-                    team.append(f"P{team_mate}")
-                    # 剩余名额从非队友中随机选择
-                    available_players = [f"P{i}" for i in range(1, 6) 
-                                       if i not in self.team_mates 
-                                       and f"P{i}" != self.id]
-                    random.shuffle(available_players)
-                    while len(team) < required_size:
-                        if available_players:
-                            team.append(available_players.pop())
-                else:
-                    # 其他轮次绝对不选择队友
-                    available_players = [f"P{i}" for i in range(1, 6) 
-                                       if i not in self.team_mates 
-                                       and f"P{i}" != self.id]
-                    random.shuffle(available_players)
-                    while len(team) < required_size:
-                        if available_players:
-                            team.append(available_players.pop())
+                # if game_round == 3:  # 第四轮
+                #     # 第四轮需要两个失败票，必须选择一个红队队友
+                #     team_mate = next(p for p in self.team_mates if f"P{p}" != self.id)
+                #     team.append(f"P{team_mate}")
+                #     # 剩余名额从非队友中随机选择
+                #     available_players = [f"P{i}" for i in range(1, 6) 
+                #                        if i not in self.team_mates 
+                #                        and f"P{i}" != self.id]
+                #     random.shuffle(available_players)
+                #     while len(team) < required_size:
+                #         if available_players:
+                #             team.append(available_players.pop())
+                # else:
+                # 其他轮次绝对不选择队友
+                available_players = [f"P{i}" for i in range(1, 6) 
+                                    if i not in self.team_mates 
+                                    and f"P{i}" != self.id]
+                random.shuffle(available_players)
+                while len(team) < required_size:
+                    if available_players:
+                        team.append(available_players.pop())
             else:
                 # 蓝队优先从猜测为蓝方的玩家中选择
                 blue_players = [pid for pid, role in self.guess.items() 
@@ -444,12 +523,12 @@ class Player:
             # 红方玩家有50%概率选择队友
             if random.random() < 0.5:
                 # 从队友中选择（排除自己）
-                team_mates = [p for p in available_players if int(p.id.replace('P', '')) in self.team_mates]
+                team_mates = [p for p in available_players if p.id in self.team_mates]
                 if team_mates:
                     return random.choice(team_mates).id
             
             # 随机选择一个非队友玩家
-            non_team_players = [p for p in available_players if int(p.id.replace('P', '')) not in self.team_mates]
+            non_team_players = [p for p in available_players if p.id not in self.team_mates]
             if non_team_players:
                 return random.choice(non_team_players).id
             
@@ -487,19 +566,21 @@ class Player:
         return red_guesses
 
 class AvalonSimulator:
-    def __init__(self, output: GameOutput, human_player_id: str = "P5", test_mode: bool = False, p5_is_morgan: bool = False):
-        """
-        初始化游戏模拟器
-        Args:
-            output: 输出接口
-            human_player_id: 人类玩家ID
-            test_mode: 是否为测试模式
-            p5_is_morgan: 在测试模式下，是否将P5设置为摩根
-        """
+    def __init__(self, output: GameOutput, human_player_id: str = "P5", 
+                 test_mode: bool = False, p5_is_morgan: bool = False,
+                 player_models: Dict[str, str] = None,
+                 random_team: bool = True,
+                 player_teams: Dict[str, str] = None):
         self.output = output
         self.test_mode = test_mode
         self.p5_is_morgan = p5_is_morgan
+        self.human_player_id = None if test_mode and not human_player_id else human_player_id
+        self.player_models = player_models or {}
+        self.random_team = random_team
+        self.player_teams = player_teams or {}
+        
         print(f"Initializing game in {'test' if test_mode else 'normal'} mode")
+        print(f"Human player ID: {self.human_player_id}")
         
         # 初始化基本属性
         self.round = 0
@@ -534,10 +615,17 @@ class AvalonSimulator:
             self.leaders = ["P5"]
             print(f"Current leader set to: {self.players[self.current_leader_index].id}")
         
-        self.llm = self._initialize_llm()
-        
-        # 初始化非人类玩家的游戏规则总结记忆
-        self.initialize_ai_memory()
+        # 读取游戏规则
+        try:
+            with open("game_rules.md", encoding="utf-8") as f:
+                self.rules_text = f.read()
+        except Exception as e:
+            self.rules_text = "无法读取游戏规则。"
+            self.output.send_message(f"读取游戏规则失败: {e}", "error")
+
+        # 添加游戏历史记录
+        self.game_history = []
+        self.game_history_header = "| 轮次 | 队长 | 任务队员 | 魔法目标 | 任务结果 | 失败票数 |\n|------|------|----------|-----------|----------|----------|"
 
     def _initialize_players(self, human_player_id: str):
         """初始化玩家列表"""
@@ -546,44 +634,10 @@ class AvalonSimulator:
         for i in range(1, 6):
             player_id = f"P{i}"
             is_human = (player_id == human_player_id)
-            player = Player(player_id, is_human=is_human, output=self.output)
+            player = Player(player_id, is_human=is_human, output=self.output, model_api=self.player_models.get(f"P{i}"))
             players.append(player)
         
         return players
-
-    def _initialize_llm(self):
-        """初始化语言模型"""
-        model_api = get_model_api()
-        if model_api == 'ollama-32b':
-            return OllamaAdapter(model_name="deepseek-r1:32b", temperature=0.8)
-        elif model_api == 'ollama-7b':
-            return OllamaAdapter(model_name="deepseek-r1:7b", temperature=0.8)
-        elif model_api == 'glm-zero':
-            return ChatOpenAI(
-                model="glm-zero-preview",
-                api_key="sk-DhBqcMHlBY21mmQTBE7VkwHhOrjjEdF5KsrOnR3rOwXVL9Il",
-                base_url="https://www.dmxapi.com/v1/"
-            )
-        elif model_api == 'deepseek-reasoner':
-            return ChatOpenAI(
-                model="deepseek-reasoner",
-                api_key="sk-DhBqcMHlBY21mmQTBE7VkwHhOrjjEdF5KsrOnR3rOwXVL9Il",
-                base_url="https://www.dmxapi.com/v1/"
-            )
-        elif model_api == 'doubao-lite':
-            return ChatOpenAI(
-                model="doubao-lite-32k",
-                api_key="sk-DhBqcMHlBY21mmQTBE7VkwHhOrjjEdF5KsrOnR3rOwXVL9Il",
-                base_url="https://www.dmxapi.com/v1/"
-            )
-        elif model_api == 'siliconflow':
-            return ChatOpenAI(
-                model="deepseek-ai/DeepSeek-R1",
-                api_key="sk-ailkxszopmpfvssuabvqsqccuhsigqfqmrybfjztezsmbhjh",
-                base_url="https://api.siliconflow.cn/v1"
-            )
-        else:
-            return ChatOpenAI(model='o1-mini')
 
     def reset_game(self):
         """重置游戏状态"""
@@ -603,6 +657,7 @@ class AvalonSimulator:
         for player in self.players:
             player.current_memory = ConversationBufferMemory()
             player.summary_memory = "First round, no summary generated yet"
+            player.rules_text = ""  # 存储原始规则文本
             player.core_beliefs = {
                 "confirmed_allies": [],
                 "confirmed_enemies": []
@@ -623,18 +678,28 @@ class AvalonSimulator:
         db.session.commit()
 
     def discussion_phase(self):
-        """模拟讨论阶段"""
-        self.output.send_message("讨论阶段开始", 'action')
-        game_state = self.get_game_state()
+        """讨论阶段"""
+        self.output.send_message("=== 讨论阶段 ===", 'action')
+        
+        # 获取所有玩家的发言
         speeches = {}  # 只存储每个玩家的发言内容
         for player in self.players:
-            speech = player.generate_speech(game_state, self.llm)
+            if player.is_human:
+                prompt = f"玩家 {player.id} 的回合：请发言（你是{'红方' if player.role == 'red' else '蓝方'}）"
+                if player.role == "red":
+                    prompt += f"，你的队友是 {player.team_mates}"
+                print(f"Waiting for human player {player.id} speech input")  # 调试信息
+                speech = self.output.get_player_input(prompt, player.id)
+                print(f"Received speech: {speech}")  # 调试信息
+            else:
+                speech = player.next_speech#generate_speech(game_state, self.llm)
             speeches[player.id] = speech  # 存储发言内容
             self.output.send_message(f"{player.id} 说：{speech}", 'info')
             # 广播发言到所有玩家记忆（这部分保持不变，因为玩家需要记住所有人的发言）
             for listener in self.players:
                 listener.add_event(f"{player.id}发言：{speech}")
         return speeches
+    
 
     def run_round(self):
         """执行单轮游戏"""
@@ -643,30 +708,38 @@ class AvalonSimulator:
             return False
 
         # 保存当前的队长作为上一任队长
-        self.last_leader = self.current_leader_index
-        
+        #self.last_leader = self.current_leader_index
+        """运行一轮游戏"""
         # 第一轮开始时选择首个队长
         if self.round == 0:
             if self.test_mode:
-                leader = self.current_leader_index
+                # 测试模式下，P5作为第一个队长
+                self.current_leader_index = 4  # P5的索引
+                self.leaders.append("P5")
                 self.output.send_message(f"第{self.round + 1}轮 P5作为首个队长", 'action')
             else:
-                # 从未当过队长的玩家中选择第一个队长
-                available_players = [p for p in self.players if p.id not in self.leaders]
-                next_leader = random.choice(available_players)
-                self.current_leader_index = self.players.index(next_leader)
-                self.leaders.append(next_leader.id)
-                self.output.send_message(f"第{self.round + 1}轮 随机选择 {leader.id}作为队长", 'action')
-   
+                # 随机选择第一个队长
+                first_leader = random.choice(self.players)
+                self.current_leader_index = self.players.index(first_leader)
+                self.leaders.append(first_leader.id)
+                self.output.send_message(f"第{self.round + 1}轮 随机选择 {first_leader.id}作为队长", 'action')
 
+        #Generate initial summaries and speeches for all players
+        if self.round == 0:
+            ai_summaries = self.run_ai_thinking(self.get_game_state())
+        
         # 讨论阶段
         round_speeches = self.discussion_phase()
+
+        #Generate thinking right after the first speech
+        if self.round == 0:
+            ai_summaries = self.run_ai_thinking(self.get_game_state())
 
         # 队长选择队伍
         leader = self.players[self.current_leader_index]
         team = leader.propose_team(
             required_size=self.task_sizes[self.round],
-            llm=self.llm
+            llm=leader.llm
         )
         self.output.send_message(f"{leader.id}指定队伍：{team}", 'info')
 
@@ -709,13 +782,18 @@ class AvalonSimulator:
         if self.round == 3:  # 第四轮
             required_fails = 1  # 根据新规则修改
         
-        if fail_votes >= required_fails:
-            self.red_wins += 1
-        else:
+        success = fail_votes < required_fails
+
+        # 更新胜负次数
+        if success:
             self.blue_wins += 1
+            self.output.send_message(f"任务成功！蓝方胜利，当前比分 蓝方{self.blue_wins}胜 : 红方{self.red_wins}胜", "result")
+        else:
+            self.red_wins += 1
+            self.output.send_message(f"任务失败！红方胜利，当前比分 蓝方{self.blue_wins}胜 : 红方{self.red_wins}胜", "result")
 
         self.last_team = team
-        self.last_result = "成功" if fail_votes == 0 else "失败"
+        self.last_result = "成功" if success else "失败"
 
         # 当前队长选择下一任队长：只允许未做过队长的玩家被选择
         available_players = [p for p in self.players if p.id not in self.leaders]
@@ -730,6 +808,8 @@ class AvalonSimulator:
             next_leader_obj = next((p for p in self.players if p.id == next_leader), None)
         else:
             next_leader_obj = next_leader
+        
+        self.last_leader = self.current_leader_index
         self.current_leader_index = self.players.index(next_leader_obj)
         # 记录新队长的id（确保每位玩家在一个周期只做一次队长）
         if next_leader_obj.id not in self.leaders:
@@ -766,30 +846,28 @@ class AvalonSimulator:
             print(f"Error saving round data (part 1): {e}")
             db.session.rollback()
         
-        self.round += 1
+        self.round += 1        
         
-        # 检查游戏是否结束
-        if self.blue_wins >= 3 or self.red_wins >= 3 or self.round >= len(self.task_sizes):
-            return False
+        # 确保 team 列表中的元素格式正确
+
+        self.update_game_history(
+            leader_id=self.players[self.last_leader].id, 
+            team=team,
+            magic_target=amulet_target.id, 
+            result='success' if success else 'fail', 
+            fail_votes=fail_votes
+        )
         
         # AI开始思考：并行调用生成总结，提高效率
-        self.output.send_message("AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...", 'action')
-        ai_summaries = {}
-        with ThreadPoolExecutor() as executor:
-            # 提交所有非人类玩家的生成总结任务
-            future_to_player = {
-                executor.submit(player.generate_summary, game_state=self.get_game_state(), llm=self.llm): player.id
-                for player in self.players if not player.is_human
-            }
-            # 收集各任务的返回结果
-            for future in as_completed(future_to_player):
-                player_id = future_to_player[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    self.output.send_message(f"AI总结生成失败 for {player_id}: {exc}", "error")
-                    result = "总结生成失败"
-                ai_summaries[player_id] = result
+        if self.red_wins == 3:
+            self.output.send_message("红方已获得三次胜利，蓝方玩家进行最后分析...", "action")
+        elif self.blue_wins == 3:
+            self.output.send_message("蓝方已获得三次胜利，游戏结束", "action")
+            return False
+        else:
+            self.output.send_message("AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...", 'action')
+        
+        ai_summaries = self.run_ai_thinking(self.get_game_state())
         
         # 第二部分：写入AI的思考和猜测
         try:
@@ -827,18 +905,22 @@ class AvalonSimulator:
         for p in self.players:
             p.has_amulet = False
         
+        if self.blue_wins >= 3 or self.red_wins >= 3 or self.round >= len(self.task_sizes):
+            return False
+        
         return True
 
-    def get_game_state(self):
+    def get_game_state(self) -> Dict:
         return {
             "blue_wins": self.blue_wins,
             "red_wins": self.red_wins,
+            "round": self.round,
+            "leader_id": self.players[self.current_leader_index].id,
+            "game_history": self.get_formatted_history(),
             "last_team": self.last_team,
             "last_result": self.last_result,
             "last_fail_votes": getattr(self, 'last_fail_votes', 0),  # 添加失败票数
-            "round": self.round,
-            "leader_id":self.players[self.current_leader_index].id,
-            "last_leader_id":self.players[self.last_leader].id
+            "last_leader_id":self.players[self.current_leader_index].id,
         }
 
     def get_mission_vote(self, player: Player) -> bool:
@@ -861,13 +943,13 @@ class AvalonSimulator:
             if player.role == "red":
                 # 摩根勒菲无视魔法指示物
                 if player.character_role == "morgan":
-                    return random.random() > 0.9  # 90%概率投失败
+                    return False #random.random() > 1.0  # 90%概率投失败
                 
                 # 普通红队玩家如果被施加魔法指示物必须投成功
                 if player.has_amulet:
                     return True
                 
-                return random.random() > 0.9  # 90%概率投失败
+                return False #random.random() > 0.9  # 90%概率投失败
             else:
                 return True
 
@@ -885,6 +967,8 @@ class AvalonSimulator:
 
         # 重新获取当前游戏记录
         self.current_game = db.session.merge(self.current_game)
+
+        self.initialize_ai_memory()
         
         # 分配角色
         self.assign_roles()
@@ -973,37 +1057,62 @@ class AvalonSimulator:
             self.output.send_message("指认阶段结束：红队成功防守。", "action")
 
     def assign_roles(self):
-        # 在测试模式下，如果指定P5为摩根，需要先确保P5为红方
-        if self.test_mode and self.p5_is_morgan:
-            p5 = next((p for p in self.players if p.id == "P5"), None)
-            if p5:
-                # 先将P5分配为红方
-                other_players = [p for p in self.players if p.id != "P5"]
-                blue_players = random.sample(other_players, 3)
-                red_players = [p for p in other_players if p not in blue_players]
-                red_players.append(p5)  # 将P5添加到红方
-            else:
-                self.output.send_message("错误：找不到P5玩家", "error")
-                # 如果找不到P5，使用默认分配
+        print("Assigning roles with:", {  # 添加调试日志
+            'random_team': self.random_team,
+            'player_teams': self.player_teams
+        })
+        # 检查是否使用手动分配的队伍
+        if self.player_teams and not self.random_team:  # 简化条件判断
+            blue_players = [p for p in self.players if self.player_teams.get(p.id) == 'blue']
+            red_players = [p for p in self.players if self.player_teams.get(p.id) == 'red']
+
+            print("Manual team assignment:", {  # 添加调试日志
+                'blue_players': [p.id for p in blue_players],
+                'red_players': [p.id for p in red_players]
+            })
+            
+            # 验证分配是否合法（3蓝2红）
+            if len(blue_players) != 3 or len(red_players) != 2:
+                self.output.send_message("错误：必须分配3个蓝方和2个红方玩家", "error")
+                # 回退到随机分配
                 blue_players = random.sample(self.players, 3)
                 red_players = [p for p in self.players if p not in blue_players]
         else:
-            # 正常分配阵营
-            blue_players = random.sample(self.players, 3)
-            red_players = [p for p in self.players if p not in blue_players]
+            # 在测试模式下，如果指定P5为摩根，需要先确保P5为红方
+            if self.test_mode and self.p5_is_morgan:
+                p5 = next((p for p in self.players if p.id == "P5"), None)
+                if p5:
+                    # 先将P5分配为红方
+                    other_players = [p for p in self.players if p.id != "P5"]
+                    blue_players = random.sample(other_players, 3)
+                    red_players = [p for p in other_players if p not in blue_players]
+                    red_players.append(p5)  # 将P5添加到红方
+                else:
+                    self.output.send_message("错误：找不到P5玩家", "error")
+                    # 如果找不到P5，使用默认分配
+                    blue_players = random.sample(self.players, 3)
+                    red_players = [p for p in self.players if p not in blue_players]
+            else:
+                # 正常随机分配阵营
+                blue_players = random.sample(self.players, 3)
+                red_players = [p for p in self.players if p not in blue_players]
         
         # 设置所有玩家的角色和队友
+
         for p in self.players:
             if p in blue_players:
                 p.role = "blue"
             else:
                 p.role = "red"
-                p.team_mates = [int(other.id.replace('P', '')) for other in red_players if other != p]
+                p.team_mates = [other.id for other in red_players if other != p]
             
             # 如果是红方玩家，更新其猜测表
             if p.role == "red":
                 for mate in p.team_mates:
-                    p.guess[f"P{mate}"] = "red"
+                    p.guess[mate] = "red"
+                for mate in blue_players:
+                    p.guess[mate.id] = "blue"
+            print(p.id,p.role, '\n\n\n\n')
         
         # 分配摩根角色
         if self.test_mode and self.p5_is_morgan:
@@ -1026,6 +1135,7 @@ class AvalonSimulator:
             role=morgan.role,
             is_ai=not morgan.is_human,
             character=morgan.character,
+            team_mates=','.join(p.team_mates),
             strategy=morgan.strategy,
             morgan=True
         )
@@ -1040,6 +1150,7 @@ class AvalonSimulator:
                 is_ai=not p.is_human,
                 character=p.character,
                 strategy=p.strategy,
+                team_mates=','.join(p.team_mates),
                 morgan=False
             )
             db.session.add(player_record)
@@ -1050,48 +1161,57 @@ class AvalonSimulator:
             self.output.send_message("你是摩根勒菲，你可以无视魔法指示物的限制", "action")
 
     def initialize_ai_memory(self):
-        """
-        对所有非人类玩家，通过LLM读取游戏规则生成初始化的总结记忆，
-        帮助AI玩家熟悉游戏的基本规则
-        """
-        try:
-            with open("game_rules.md", encoding="utf-8") as f:
-                rules_text = f.read()
-        except Exception as e:
-            rules_text = "无法读取游戏规则。"
-            self.output.send_message(f"读取游戏规则失败: {e}", "error")
-        
-        def init_single_ai(player):
-            """单个AI玩家的初始化函数"""
+        """初始化所有 AI 玩家的规则文本"""
+        for player in self.players:
             if not player.is_human:
-                prompt = (
-                    f"请仔细阅读以下游戏规则，并生成一段简短的总结，帮助你熟悉该游戏的基本规则：\n\n"
-                    f"{rules_text}\n\n总结："
-                )
-                try:
-                    response = self.llm([HumanMessage(content=prompt)])
-                    if isinstance(response, dict) and "content" in response:
-                        summary = response["content"]
-                    else:
-                        summary = response.content if hasattr(response, "content") else str(response)
-                except Exception as ex:
-                    summary = "初始化总结失败"
-                    self.output.send_message(f"LLM调用失败: {ex}", "error")
-                
-                # 直接存储规则总结
-                player.rule_summary = summary
-                return f"AI玩家 {player.id} 初始化总结记忆生成成功"
-            return None
+                player.rules_text = self.rules_text
+
+    def update_game_history(self, leader_id: str, team: List[str], magic_target: Optional[str], result: str, fail_votes: int):
+        """
+        更新游戏历史记录
+        """
+        round_num = len(self.game_history) + 1
+        team_str = ', '.join(sorted(team))  # 排序以保持一致性
+        magic_str = magic_target if magic_target else '-'
+        result_str = f"成功(蓝方胜)" if result == "success" else "失败(红方胜)"
         
-        # 使用线程池并行处理所有AI玩家的初始化
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(init_single_ai, player) for player in self.players]
+        history_entry = f"| {round_num} | {leader_id} | {team_str} | {magic_str} | {result_str} | {fail_votes} |"
+        self.game_history.append(history_entry)
+
+    def get_formatted_history(self) -> str:
+        """
+        获取格式化的游戏历史记录
+        """
+        if not self.game_history:
+            return "游戏刚刚开始，还没有历史记录。"
             
-            # 等待所有初始化完成并输出结果
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    self.output.send_message(result, "info")
+        return self.game_history_header + '\n' + '\n'.join(self.game_history)
+
+    def run_ai_thinking(self, game_state: Dict) -> Dict[str, str]:
+        """
+        运行所有 AI 玩家的思考过程
+        Args:
+            game_state: 当前游戏状态
+        Returns:
+            Dict[str, str]: AI 玩家 ID 到其思考结果的映射
+        """
+        ai_summaries = {}
+        with ThreadPoolExecutor() as executor:
+            # 提交所有非人类玩家的生成总结任务
+            future_to_player = {
+                executor.submit(player.generate_summary, game_state=game_state, llm=player.llm): player.id
+                for player in self.players if not player.is_human
+            }
+            # 收集各任务的返回结果
+            for future in as_completed(future_to_player):
+                player_id = future_to_player[future]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    self.output.send_message(f"AI总结生成失败 for {player_id}: {exc}", "error")
+                    result = "总结生成失败"
+                ai_summaries[player_id] = result
+        return ai_summaries
 
 def set_model_api(model: str):
     """设置全局模型 API"""

@@ -40,14 +40,57 @@
             </div>
         </div>
         <div id="game-controls">
+            {% if user and user.is_admin %}
+            <div class="admin-controls">
+                <div class="game-options">
+                    <div class="checkbox-option">
+                        <label>
+                            <input type="checkbox" id="random-team-checkbox" checked onchange="toggleTeamSelection()">
+                            随机分配红蓝方
+                        </label>
+                    </div>
+                    <div class="checkbox-option">
+                        <label>
+                            <input type="checkbox" id="include-human-checkbox" onchange="updateGameOptions()">
+                            包含人类玩家 (P5)
+                        </label>
+                    </div>
+                    <div class="player-models">
+                        <h4>Player Models:</h4>
+                        {% for i in range(1, 6) %}
+                        <div class="player-model-select">
+                            <label for="p{{i}}-model">P{{i}}:</label>
+                            <select id="p{{i}}-model" class="model-select">
+                                <option value="chatgpt">OpenAI</option>
+                                <option value="ollama-32b">Ollama (DeepSeek-32B)</option>
+                                <option value="ollama-7b">Ollama (DeepSeek-7B)</option>
+                                <option value="glm-zero">GLM Zero</option>
+                                <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+                                <option value="doubao-lite">Doubao Lite 32K</option>
+                                <option value="siliconflow">SiliconFlow</option>
+                                <option value="gemini">Gemini 2.0</option>
+                                <option value="fireworks">Deepseek R1-Fireworks</option>
+                            </select>
+                            <select id="p{{i}}-team" class="team-select" disabled>
+                                <option value="random">随机</option>
+                                <option value="blue">蓝方</option>
+                                <option value="red">红方</option>
+                            </select>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            {% endif %}
             <button onclick="startGame()">Start New Game</button>
             {% if user and user.is_admin %}
             <button onclick="startTestGame()" class="test-button">Start Test Game</button>
             <div class="test-options">
-                <label>
-                    <input type="checkbox" id="p5-morgan-checkbox" onchange="updateTestOptions()">
-                    将P5设为摩根
-                </label>
+                <div class="test-checkbox">
+                    <label>
+                        <input type="checkbox" id="p5-morgan-checkbox" onchange="updateTestOptions()">
+                        将P5设为摩根
+                    </label>
+                </div>
             </div>
             <div class="model-select">
                 <label for="model-choice">选择模型:</label>
@@ -68,6 +111,20 @@
             {% endif %}
         </div>
         <div id="messages" class="log-container"></div>
+        <div class="test-mode-options" id="testModeOptions" style="display: none;">
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="p5IsMorgan" name="p5_is_morgan">
+                <label class="form-check-label" for="p5IsMorgan">
+                    Set P5 as Morgan
+                </label>
+            </div>
+            <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="includeHuman" name="include_human">
+                <label class="form-check-label" for="includeHuman">
+                    Include Human Player
+                </label>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
@@ -133,10 +190,44 @@
         }
     });
 
+    function toggleTeamSelection() {
+        const randomTeam = document.getElementById('random-team-checkbox').checked;
+        const teamSelects = document.querySelectorAll('.team-select');
+        
+        teamSelects.forEach(select => {
+            select.disabled = randomTeam;
+            if (randomTeam) {
+                select.value = 'random';
+            }
+        });
+    }
+
     function startGame() {
         try {
-            console.log('Starting game...');  // 调试信息
-            socket.emit('start_game');
+            console.log('Starting game...');
+            const includeHuman = document.getElementById('include-human-checkbox').checked;
+            const randomTeam = document.getElementById('random-team-checkbox').checked;
+            const playerModels = {};
+            const playerTeams = {};
+            
+            for (let i = 1; i <= 5; i++) {
+                playerModels[`P${i}`] = document.getElementById(`p${i}-model`).value;
+                playerTeams[`P${i}`] = document.getElementById(`p${i}-team`).value;
+            }
+            
+            console.log('Sending data:', {  // 添加调试日志
+                include_human: includeHuman,
+                player_models: playerModels,
+                random_team: randomTeam,
+                player_teams: playerTeams
+            });
+            
+            socket.emit('start_game', {
+                include_human: includeHuman,
+                player_models: playerModels,
+                random_team: randomTeam,
+                player_teams: playerTeams
+            });
         } catch (error) {
             console.error('Error starting game:', error);
         }
@@ -155,16 +246,25 @@
         console.log('Starting test game...');
         try {
             const p5IsMorgan = document.getElementById('p5-morgan-checkbox').checked;
+            const includeHuman = document.getElementById('include-human-checkbox').checked;
             console.log('P5 is morgan:', p5IsMorgan);  // 添加调试日志
-            socket.emit('start_test_game', { p5_is_morgan: p5IsMorgan });
+            console.log('Include human:', includeHuman);  // 添加调试日志
+            socket.emit('start_test_game', { 
+                p5_is_morgan: p5IsMorgan,
+                include_human: includeHuman
+            });
         } catch (error) {
             console.error('Error starting test game:', error);
         }
     }
 
     function updateTestOptions() {
-        const checkbox = document.getElementById('p5-morgan-checkbox');
-        console.log('Test options updated:', { p5_is_morgan: checkbox.checked });
+        const morganCheckbox = document.getElementById('p5-morgan-checkbox');
+        const humanCheckbox = document.getElementById('include-human-checkbox');
+        console.log('Test options updated:', { 
+            p5_is_morgan: morganCheckbox.checked,
+            include_human: humanCheckbox.checked
+        });
     }
 
     function exportData(format) {
@@ -218,6 +318,13 @@
             }
         })
         .catch(error => console.error('Error:', error));
+    }
+
+    function updateGameOptions() {
+        const humanCheckbox = document.getElementById('include-human-checkbox');
+        console.log('Game options updated:', {
+            include_human: humanCheckbox.checked
+        });
     }
     </script>
 </body>
