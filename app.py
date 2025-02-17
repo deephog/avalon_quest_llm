@@ -193,30 +193,37 @@ def handle_disconnect():
 @socketio.on('start_game')
 def handle_start_game(data):
     include_human = data.get('include_human', True)
-    player_models = data.get('player_models', {})  # 获取每个玩家的模型设置
-    random_team = data.get('random_team', True)    # 获取是否随机分配队伍
-    player_teams = data.get('player_teams', {})    # 获取手动分配的队伍信息
+    player_models = data.get('player_models', {})
+    random_team = data.get('random_team', True)
+    player_teams = data.get('player_teams', {})
+    simulation_count = data.get('simulation_count', 1)
     
     print("Starting game")
-    print("Creating new game")
-    print(f"Player models: {player_models}")  # 添加调试日志
-    print(f"Team assignment: {'random' if random_team else 'manual'}")  # 添加调试日志
-    if not random_team:
-        print(f"Player teams: {player_teams}")
+    print(f"Simulation count: {simulation_count}")
     
-    game_manager.game = AvalonSimulator(
-        output=game_manager.output,
-        human_player_id="P5" if include_human else None,
-        player_models=player_models,
-        random_team=random_team,
-        player_teams=player_teams
-    )
+    def run_multiple_games():
+        with app.app_context():  # 添加应用上下文
+            for i in range(simulation_count):
+                print(f"\n开始第 {i+1}/{simulation_count} 次模拟")
+                
+                game_manager.game = AvalonSimulator(
+                    output=game_manager.output,
+                    human_player_id="P5" if include_human else None,
+                    player_models=player_models,
+                    random_team=random_team,
+                    player_teams=player_teams
+                )
+                
+                game_manager.run_game(
+                    test_mode=False,
+                    p5_is_morgan=False,
+                    player_models=player_models
+                )
+                
+                if i < simulation_count - 1:  # 不是最后一次模拟
+                    game_manager.output.send_message("\n=== 准备开始下一轮模拟 ===\n", 'info')
     
-    game_thread = threading.Thread(target=lambda: game_manager.run_game(
-        test_mode=False,  # 确保不是测试模式
-        p5_is_morgan=False,  # 确保不是摩根模式
-        player_models=player_models
-    ))
+    game_thread = threading.Thread(target=run_multiple_games)
     game_thread.start()
 
 @socketio.on('player_input')

@@ -55,6 +55,10 @@
                             包含人类玩家 (P5)
                         </label>
                     </div>
+                    <div class="input-group">
+                        <label for="simulation-count">模拟次数：</label>
+                        <input type="number" id="simulation-count" value="1" min="1" max="100" title="请输入1-100之间的数字">
+                    </div>
                     <div class="player-models">
                         <h4>Player Models:</h4>
                         {% for i in range(1, 6) %}
@@ -207,6 +211,15 @@
             console.log('Starting game...');
             const includeHuman = document.getElementById('include-human-checkbox').checked;
             const randomTeam = document.getElementById('random-team-checkbox').checked;
+            let simulationCount = parseInt(document.getElementById('simulation-count').value);
+            
+            // 验证模拟次数
+            if (isNaN(simulationCount) || simulationCount < 1 || simulationCount > 100) {
+                console.warn('Invalid simulation count, using default value 1');
+                simulationCount = 1;
+                document.getElementById('simulation-count').value = '1';
+            }
+            
             const playerModels = {};
             const playerTeams = {};
             
@@ -219,14 +232,16 @@
                 include_human: includeHuman,
                 player_models: playerModels,
                 random_team: randomTeam,
-                player_teams: playerTeams
+                player_teams: playerTeams,
+                simulation_count: simulationCount
             });
             
             socket.emit('start_game', {
                 include_human: includeHuman,
                 player_models: playerModels,
                 random_team: randomTeam,
-                player_teams: playerTeams
+                player_teams: playerTeams,
+                simulation_count: simulationCount
             });
         } catch (error) {
             console.error('Error starting game:', error);

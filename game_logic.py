@@ -24,8 +24,8 @@ import google.generativeai as genai
 from config import Config
 
 os.environ["OPENAI_API_KEY"] = "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"
-CHARACTER = ['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
-STRATEGY = ['激进', '保守', '稳定']
+CHARACTER = ['沉稳']#['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
+STRATEGY = ['稳定']#['激进', '保守', '稳定']
 _model_api = 'chatgpt'  # 私有变量
 
 class OllamaAdapter:
@@ -69,8 +69,6 @@ class Player:
         self.model_api = model_api or get_model_api()  # 使用指定的模型或默认模型
         self.llm = self._initialize_llm()
         
-        #print(self.model_api, '\n\n\n\n\n\n\n\n\n\n\n')
-        
         # 记忆系统
         self.current_memory = ConversationBufferMemory()
         self.summary_memory = "First round, no summary generated yet"
@@ -88,6 +86,8 @@ class Player:
         self.character_role = None  # 特殊角色（如摩根勒菲）
         self.has_amulet = False  # 是否持有魔法指示物
         self.next_speech = ""  # 存储下一轮的发言
+        self.selected_team = []
+        self.magic_target = ""
 
     def _initialize_llm(self):
         """初始化该玩家专属的语言模型"""
@@ -95,6 +95,7 @@ class Player:
             if self.model_api == 'fireworks':
                 return ChatFireworks(
                     model_name="accounts/fireworks/models/deepseek-r1",
+                    max_tokens=40960,
                     fireworks_api_key=Config.FIREWORKS_API_KEY,
                 )
             elif self.model_api == 'gemini':
@@ -121,9 +122,9 @@ class Player:
                 )
             elif self.model_api == 'deepseek-reasoner':
                 return ChatOpenAI(
-                    model="DeepSeek-R1",
-                    api_key="bd7e65cb-ddda-4b2e-89c9-3c70b0696733",
-                    base_url="https://api.sambanova.ai/v1"
+                    model="deepseek-ai/DeepSeek-R1",
+                    api_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ5dng1MjExQHBzdS5lZHUiLCJpYXQiOjE3Mzk1OTkwNTR9.2CCkv7SpWhcAK6pOvkb2rXK9uPYum4FUFUKunES16yM",
+                    base_url="https://api.hyperbolic.xyz/v1"
                 )
             elif self.model_api == 'doubao-lite':
                 return ChatOpenAI(
@@ -134,6 +135,7 @@ class Player:
             elif self.model_api == 'siliconflow':
                 llm = ChatOpenAI(
                     model="Pro/deepseek-ai/DeepSeek-R1",
+                    max_tokens=40960,
                     api_key="sk-ailkxszopmpfvssuabvqsqccuhsigqfqmrybfjztezsmbhjh",
                     base_url="https://api.siliconflow.cn/v1",
                 )
@@ -190,55 +192,137 @@ class Player:
         {self._get_current_memory()}
         """
 
-    def generate_summary(self, game_state: Dict, llm) -> str:
+    def generate_summary(self, game_state: Dict, llm, team_size: int) -> str:
         """生成本轮总结并存入记忆"""
-        # if not game_state['last_team']:  # 如果是第一轮
-        #     return "First round, no summary needed."
-        
         game_history = game_state['game_history']
+        is_leader = game_state['leader_id'] == self.id
+        required_team_size = team_size  # 获取本轮需要的队员数量
+        leader_tasks = ""
+        leader_output_format = ""
+
+        def validate_leader_response(response: str) -> bool:
+            if not ("TeamSelection:" in response and "MagicTarget:" in response):
+                return False
+            
+            try:
+                # 验证队伍大小
+                team_part = response.split("TeamSelection:")[1].split("MagicTarget:")[0].strip()
+                team_members = [p.strip() for p in team_part.split() if p.strip()]
+                if len(team_members) != required_team_size - 1:
+                    print(f"队长选择的队伍大小不正确: 需要 {required_team_size-1} 人，实际选择了 {len(team_members)} 人")
+                    return False
+                
+                # 验证是否有重复队员
+                if len(set(team_members)) != len(team_members):
+                    print(f"队长选择的队伍中有重复队员: {team_members}")
+                    return False
+                
+                # 验证队长是否把自己也加入了队伍
+                if self.id in team_members:
+                    print(f"队长 {self.id} 不应该在 TeamSelection 中包含自己")
+                    return False
+                
+                # 验证魔法目标
+                magic_part = response.split("MagicTarget:")[1].strip().split()[0]
+                if not magic_part:
+                    print("队长没有选择魔法目标")
+                    return False
+                
+                # 验证魔法目标是否在队伍中（包括队长自己）
+                valid_targets = team_members + [self.id]
+                if magic_part not in valid_targets:
+                    print(f"魔法目标 {magic_part} 不在队伍中")
+                    return False
+                
+                # 验证通过后，直接设置 selected_team
+                self.selected_team = valid_targets
+                print(f"解析的队员: {team_part}")
+                print(f"最终队伍: {self.selected_team}")
+
+                self.magic_target = magic_part
+                print(f"队长 {self.id} 选择的魔法目标: {self.magic_target}")
+                
+                return True
+            except Exception as e:
+                print(f"验证队长响应时出错: {e}")
+                return False
+
+        if is_leader:
+            leader_tasks = f"""
+                队长附加任务：作为本轮队长，你需要额外完成以下任务：
+                1. 在“请按以下格式输出的”提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
+                  - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
+                  - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: Px Py"
+
+                2. 在“请按以下格式输出的”提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
+                  - 目标必须是你选择的队员之一或你自己
+                  - 示例格式："MagicTarget: Px"
+                
+                请记住：
+                - 你的选择应该基于你的分析和策略
+                - 如果你是蓝方，应该选择你认为可信的玩家，并且要尽可能与你发言中说自己要带的人一致，否则会降低你的信任度
+                - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
+                """
+            
+            leader_output_format = """
+                TeamSelection:
+                [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5]
+                
+                MagicTarget:
+                [在这里从队伍成员（包括你自己）中选择1名作为魔法目标, 用ID（如P1）表示]
+            """
 
         if self.role == 'red':
             prompt = f"""
-                                你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
-                                
-                                {game_history}
+                你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
+                
+                {game_history}
 
-                                你自己的ID：{self.id}
+                你自己的ID：{self.id}
 
-                                当前轮队长ID：{game_state['leader_id']}
-                                
-                                最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
-                                {self._get_current_memory()}
+                你队友的ID：{','.join(self.team_mates)}
 
-                                个人历史分析回顾：
-                                {self._get_summary_history()}
+                当前轮队长ID：{game_state['leader_id']}
 
-                                游戏规则回顾：
-                                {self.rules_text}
+                场上所有玩家：P1 P2 P3 P4 P5
+                
+                最近信息与对话记录：
+                {self._get_current_memory()}
 
-                                你的游玩策略风格: {self.strategy}
+                个人历史分析回顾：
+                {self._get_summary_history()}
 
-                                请完成以下两个任务：
-                                
-                                一、你是红方玩家，请综合分析以下内容并以"Summary："开头输出你的分析：
-                                - 评估场上的胜负局势，组队情况，你跟你队友目前在其它玩家眼中的信任度，来思考是应该执行更保守的策略（比如隐藏身份，跟随大流），还是更激进的策略（比如质疑蓝方玩家，将局势搅浑）
-                                - 对场上的蓝队玩家逐一整理一个名单，谁更值得拉拢，应该向谁泼脏水，让他被排除在任务之外。
-                                - 对后续游戏的策略计划。
-                                分析时请注意以下一些规则：
-                                - 摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                                - 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，和计划后续的队长转移时，请注意这一点。
+                游戏规则回顾：
+                {self.rules_text}
 
-                                二、 生成下一轮发言：
-                                用"NextSpeech:"开头给出一段100-200个字的发言，可以根据策略自由发挥，混淆视听，千万不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
-                                发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
+                你的游玩策略风格: {self.strategy}
 
-                                请按以下格式输出：
-                                Summary:
-                                [在这里输出500字以内的局势和策略分析]
+                请完成以下任务：
 
-                                NextSpeech:
-                                [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，符合你的策略风格{self.strategy}和性格特点{self.character}]
-                                """
+                提醒：请限制你思考的深度，不要超过5层，不要超过500字。
+                
+                一、你是红方玩家，请综合分析以下内容并以"Summary："开头输出你的分析：
+                - 评估场上的胜负局势，组队情况，你跟你队友目前在其它玩家眼中的信任度，来思考该执行什么样的策略，是隐藏自己增加信任度，还是混淆视听，降低其它蓝队玩家的信任度。
+                - 对后续游戏的策略计划。
+                分析时请注意以下一些规则：
+                - 摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                - 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
+
+                二、 生成下一轮发言：
+                用"NextSpeech:"开头给出一段100-200个字的发言，可以根据策略自由发挥，混淆视听，千万不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
+                发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
+
+                {leader_tasks if is_leader else ""}
+
+                请按以下格式输出：
+                Summary:
+                [在这里输出500字以内的局势和策略分析]
+
+                NextSpeech:
+                [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，符合你的策略风格{self.strategy}和性格特点{self.character}]
+
+                {leader_output_format if is_leader else ""}
+                """
         else:
             prompt = f"""
                     你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
@@ -248,6 +332,8 @@ class Player:
                     你自己的ID：{self.id}
 
                     当前轮队长ID：{game_state['leader_id']}
+
+                    场上所有玩家：P1 P2 P3 P4 P5
 
                     最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
                     {self._get_current_memory()}
@@ -260,14 +346,16 @@ class Player:
 
                     你的游玩策略风格: {self.strategy}
 
-                    请完成三个任务：
+                    请完成以下任务：
+
+                    提醒：请限制你思考的深度，不要超过5层，不要超过500字。
                     
                     一、 分析并总结当前局势：
                     如果你是蓝方玩家，请综合分析以下内容，并以"Summary："开头输出你的分析：
                     1. 根据所有以往任务表现、组队选择、队长转移、魔法指示物使用等去推理可疑玩家。
-                    2. 根据摩根勒菲的特殊能力，判断摩根勒菲是否被使用魔法，如果被使用魔法，则摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                    3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，和计划后续的队长转移时，请注意这一点。
-                    4. 其他玩家的发言可信度分析。要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。也要尝试判断是不是有人在尝试混淆视听。 
+                    2. 判断摩根勒菲是否被使用魔法，摩根勒菲可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                    3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
+                    4. 要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。
                     5. 你当前的怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个。
                     6. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，并带你做任务。
                     7. 对后续游戏的策略计划。
@@ -282,6 +370,8 @@ class Player:
                     如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
                     发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
 
+                    {leader_tasks if is_leader else ""}
+
                     请按以下格式输出：
                     Summary:
                     [在这里输出500字以内的局势和策略分析]
@@ -292,18 +382,33 @@ class Player:
 
                     NextSpeech:
                     [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
-                    """
-        if self.model_api.startswith('ollama'):
-            response = llm([HumanMessage(content=prompt)]).get("content", "")
-        else:
-            response = llm([HumanMessage(content=prompt)]).content
 
-        #self.current_memory.clear()
+                    {leader_output_format if is_leader else ""}
+                    """
+        # 生成响应，如果是队长且响应不符合要求则重试
+        max_retries = 5
+        retry_count = 0
+        while True:
+            if self.model_api.startswith('ollama'):
+                response = llm([HumanMessage(content=prompt)]).get("content", "")
+            else:
+                response = llm([HumanMessage(content=prompt)]).content
+            
+            if not is_leader or validate_leader_response(response):
+                break
+            
+            retry_count += 1
+            if retry_count >= max_retries:
+                print(f"警告：队长 {self.id} 的响应在 {max_retries} 次尝试后仍不符合要求")
+                break
+            
+            print(f"队长 {self.id} 的响应不包含必要元素，正在重试 ({retry_count}/{max_retries})")
 
         # 解析响应
         try:
             # 清理和标准化响应文本
             response = response.strip()
+
             if "Summary:" not in response:
                 print(f"Invalid response format: {response}")
                 return response
@@ -314,8 +419,13 @@ class Player:
             
             # 提取下一轮发言
             if "NextSpeech:" in response:
-                next_speech = response.split("NextSpeech:")[1].strip()
-                self.next_speech = next_speech  # 存储下一轮的发言
+                next_speech = response.split("NextSpeech:")[1]
+
+                if 'TeamSelection:' in next_speech:
+                    next_speech = next_speech.split("TeamSelection:")[0].strip()
+                    self.next_speech = next_speech
+                else:
+                    self.next_speech = next_speech.strip()
 
             if self.role == 'blue':
                 # 只有蓝方需要猜测
@@ -348,6 +458,7 @@ class Player:
                         self.guess[p] = guess_json[p]
             
             self.summary_memory = summary_part
+
             return response
             
         except Exception as e:
@@ -355,68 +466,6 @@ class Player:
             self.summary_memory = response
             return response
 
-    def generate_speech(self, game_state: Dict, llm) -> str:
-        if self.is_human:
-            prompt = f"玩家 {self.id} 的回合：请发言（你是{'红方' if self.role == 'red' else '蓝方'}）"
-            if self.role == "red":
-                prompt += f"，你的队友是 {self.team_mates}"
-            print(f"Waiting for human player {self.id} speech input")  # 调试信息
-            input_text = self.output.get_player_input(prompt, self.id)
-            print(f"Received speech: {input_text}")  # 调试信息
-            return input_text
-        else:
-            """生成发言（使用整合后的记忆上下文）"""
-            context = self.get_context_for_decision()
-
-            prompt = f"""
-                    {context}
-
-                    你正在玩Quest桌游，身份是{"蓝" if self.role == "blue" else "红"}阵营的{"忠臣" if self.role == "blue" else "爪牙"}。
-                    该游戏目前是五人游戏（P1、P2、P3、P4、P5），蓝方3人，红方2人，红方其中一人是摩根勒菲，摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                    当前任务阶段：第{game_state['round'] + 1}轮
-                    当前局势：蓝方{game_state['blue_wins']}胜 / 红方{game_state['red_wins']}胜
-                    当前任务队长：
-                    {game_state['leader_id']}
-
-                    你自己的ID：{self.id}
-
-                    你的怀疑清单：
-                    {self.get_guess()}
-
-                    请你分两步回答：
-                    1. 在<think>...</think>中写详细推理：
-                        <think>
-                        1. 分析历史摘要中的关键线索
-                        2. 结合当前信息评估其他玩家可信度
-                        3. 根据你summary中的策略去制定这轮的发言策略
-                        4. 不要怀疑自己（{self.id}）；
-                        5. "我相信"和"我怀疑"列表不能有重叠；
-                        6. 如果你是红方，请尽量隐藏自己和队友的身份，并尝试误导蓝方。
-                        </think>
-
-                    2. 用"Final:"开头给出一句不超过100个字的发言，如果你是蓝方，相信和怀疑的目标尽可能与你的怀疑清单一致，如果你是红方，可以根据策略自由发挥，混淆视听，不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
-                       如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
-                       你也可以通过强调自己是蓝方，来获得（或者骗取）他人的信任
-                       发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-
-                       以下是一些发言的可参考模板，但是不要局限于这些模板：
-                       "我相信X、Y， 原因：...， 我怀疑A、B， 原因：..."
-                       "由于第一轮游戏，没有什么信息，我选择不发表评论"
-                       "我是好人（或者蓝方，忠臣），请队长带上我做任务"
-
-                       或者你可以选择去bluff：
-                       "从直觉判断，我对X的身份有些怀疑，请向我证明你是一个好人（或者蓝方，忠臣）"
-
-                    然后以Final:开头生成符合角色身份和你的人物个性{self.character}和你的游玩策略{self.strategy}的发言：
-                    Final:"""
-            if self.model_api.startswith('ollama'):
-                response = llm([HumanMessage(content=prompt)]).get("content", "")
-                message = response.split("Final:")[-1].strip()[:100]
-            else:
-                response = llm([HumanMessage(content=prompt)])
-                message = response.content.split("Final:")[-1].strip()[:100]
-            
-            return message
 
     def propose_team(self, required_size, llm):
         """生成队伍提议，根据身份猜测表选择队友"""
@@ -435,59 +484,7 @@ class Player:
             team = [f"P{str(pid).upper().replace('P', '')}" for pid in team]
             return team[:required_size]
         else:
-            team = [self.id]  # 首先包含自己
-            
-            # 获取当前轮次
-            game_round = len(self.current_memory.load_memory_variables({})['history'].split("第")) - 1
-            
-            if self.role == "red":
-                # if game_round == 3:  # 第四轮
-                #     # 第四轮需要两个失败票，必须选择一个红队队友
-                #     team_mate = next(p for p in self.team_mates if f"P{p}" != self.id)
-                #     team.append(f"P{team_mate}")
-                #     # 剩余名额从非队友中随机选择
-                #     available_players = [f"P{i}" for i in range(1, 6) 
-                #                        if i not in self.team_mates 
-                #                        and f"P{i}" != self.id]
-                #     random.shuffle(available_players)
-                #     while len(team) < required_size:
-                #         if available_players:
-                #             team.append(available_players.pop())
-                # else:
-                # 其他轮次绝对不选择队友
-                available_players = [f"P{i}" for i in range(1, 6) 
-                                    if i not in self.team_mates 
-                                    and f"P{i}" != self.id]
-                random.shuffle(available_players)
-                while len(team) < required_size:
-                    if available_players:
-                        team.append(available_players.pop())
-            else:
-                # 蓝队优先从猜测为蓝方的玩家中选择
-                blue_players = [pid for pid, role in self.guess.items() 
-                              if role == "blue" and pid != self.id]
-                unknown_players = [pid for pid, role in self.guess.items() 
-                                 if role == "unknown" and pid != self.id]
-                
-                # 优先从蓝方玩家中选择
-                random.shuffle(blue_players)
-                while len(team) < required_size and blue_players:
-                    team.append(blue_players.pop())
-                
-                # 如果还不够，从未知玩家中选择
-                random.shuffle(unknown_players)
-                while len(team) < required_size and unknown_players:
-                    team.append(unknown_players.pop())
-            
-            # 确保没有重复的队员
-            team = list(set(team))
-            # 如果队伍人数不足，补充其他玩家
-            while len(team) < required_size:
-                available = [f"P{i}" for i in range(1, 6) if f"P{i}" not in team]
-                if available:
-                    team.append(random.choice(available))
-            
-            return team[:required_size]  # 确保不超过所需人数
+            return self.selected_team
 
     def choose_next_leader(self, current_players: List['Player']) -> str:
         """选择下一任队长"""
@@ -588,6 +585,7 @@ class AvalonSimulator:
         self.red_wins = 0
         self.final_winner = None
         self.task_sizes = [2, 2] if test_mode else [2, 3, 2, 3, 3]
+        print(f"初始化任务大小: {self.task_sizes}")
         self.current_leader_index = 0
         self.leaders = []
         self.last_team = None
@@ -703,6 +701,9 @@ class AvalonSimulator:
 
     def run_round(self):
         """执行单轮游戏"""
+        print(f"第 {self.round + 1} 轮的任务大小数组: {self.task_sizes}")
+        print(f"当前轮次索引 {self.round}, 需要的队员数: {self.task_sizes[self.round]}")
+        
         # 在测试模式下检查轮数
         if self.test_mode and self.round >= 2:
             return False
@@ -726,21 +727,25 @@ class AvalonSimulator:
 
         #Generate initial summaries and speeches for all players
         if self.round == 0:
-            ai_summaries = self.run_ai_thinking(self.get_game_state())
+            ai_summaries = self.run_ai_thinking(self.get_game_state(), self.task_sizes[self.round])
         
         # 讨论阶段
         round_speeches = self.discussion_phase()
 
         #Generate thinking right after the first speech
         if self.round == 0:
-            ai_summaries = self.run_ai_thinking(self.get_game_state())
-
+            ai_summaries = self.run_ai_thinking(self.get_game_state(), self.task_sizes[self.round])
+        
+        # 调试日志：检查队长的 selected_team
+        print(f"队长 {self.players[self.current_leader_index].id} 在讨论阶段后的 selected_team: {self.players[self.current_leader_index].selected_team}")
+        
         # 队长选择队伍
         leader = self.players[self.current_leader_index]
         team = leader.propose_team(
             required_size=self.task_sizes[self.round],
             llm=leader.llm
         )
+        print(f"propose_team 返回的队伍: {team}")
         self.output.send_message(f"{leader.id}指定队伍：{team}", 'info')
 
         # 队长选择魔法指示物目标
@@ -750,8 +755,10 @@ class AvalonSimulator:
             amulet_target = next((p for p in self.players if p.id == target_id), None)
         else:
             # AI队长随机选择非自己玩家：team 中存储的是玩家ID，此处转换为对应的 Player 对象
-            candidates = [p for tid in team for p in self.players if p.id == tid and p != leader]
-            amulet_target = random.choice(candidates) if candidates else None
+            # candidates = [p for tid in team for p in self.players if p.id == tid and p != leader]
+            amulet_target = next((p for p in self.players if p.id == leader.magic_target), None)
+            
+            #self.players[leader.magic_target] #random.choice(candidates) if candidates else None
         
         # 因为 amulet 是强制使用的，直接设置
         amulet_target.has_amulet = True
@@ -828,7 +835,7 @@ class AvalonSimulator:
                 leader_id=leader.id,
                 team_members=','.join(team),
                 fail_votes=fail_votes,
-                result='success' if success_votes > 0 else 'fail'
+                result='success' if success else 'fail'
             )
             db.session.add(current_round)
             
@@ -844,9 +851,7 @@ class AvalonSimulator:
             db.session.commit()
         except Exception as e:
             print(f"Error saving round data (part 1): {e}")
-            db.session.rollback()
-        
-        self.round += 1        
+            db.session.rollback()      
         
         # 确保 team 列表中的元素格式正确
 
@@ -867,14 +872,14 @@ class AvalonSimulator:
         else:
             self.output.send_message("AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...", 'action')
         
-        ai_summaries = self.run_ai_thinking(self.get_game_state())
+        ai_summaries = self.run_ai_thinking(self.get_game_state(), self.task_sizes[min(self.round+1, 4)])
         
         # 第二部分：写入AI的思考和猜测
         try:
             # 获取刚才创建的回合记录
             current_round = GameRound.query.filter_by(
                 game_id=self.current_game.id,
-                round_number=self.round - 1
+                round_number=self.round
             ).first()
             
             # 记录AI的思考和猜测
@@ -901,8 +906,11 @@ class AvalonSimulator:
             print(f"Error saving round data (part 2): {e}")
             db.session.rollback()
         
+        self.round += 1
+        
         # 清除魔法指示物
         for p in self.players:
+            p.current_memory.clear()
             p.has_amulet = False
         
         if self.blue_wins >= 3 or self.red_wins >= 3 or self.round >= len(self.task_sizes):
@@ -921,6 +929,7 @@ class AvalonSimulator:
             "last_result": self.last_result,
             "last_fail_votes": getattr(self, 'last_fail_votes', 0),  # 添加失败票数
             "last_leader_id":self.players[self.current_leader_index].id,
+            "required_team_size": self.task_sizes[self.round]
         }
 
     def get_mission_vote(self, player: Player) -> bool:
@@ -1057,16 +1066,17 @@ class AvalonSimulator:
             self.output.send_message("指认阶段结束：红队成功防守。", "action")
 
     def assign_roles(self):
-        print("Assigning roles with:", {  # 添加调试日志
+        print("Assigning roles with:", {
             'random_team': self.random_team,
             'player_teams': self.player_teams
         })
+        
         # 检查是否使用手动分配的队伍
-        if self.player_teams and not self.random_team:  # 简化条件判断
+        if self.player_teams and not self.random_team:
             blue_players = [p for p in self.players if self.player_teams.get(p.id) == 'blue']
             red_players = [p for p in self.players if self.player_teams.get(p.id) == 'red']
 
-            print("Manual team assignment:", {  # 添加调试日志
+            print("Manual team assignment:", {
                 'blue_players': [p.id for p in blue_players],
                 'red_players': [p.id for p in red_players]
             })
@@ -1098,13 +1108,14 @@ class AvalonSimulator:
                 red_players = [p for p in self.players if p not in blue_players]
         
         # 设置所有玩家的角色和队友
-
         for p in self.players:
             if p in blue_players:
                 p.role = "blue"
+                p.team_mates = []  # 蓝方没有队友
             else:
                 p.role = "red"
-                p.team_mates = [other.id for other in red_players if other != p]
+                # 确保队友列表只包含其他红方玩家的ID
+                p.team_mates = [other.id for other in red_players if other.id != p.id]
             
             # 如果是红方玩家，更新其猜测表
             if p.role == "red":
@@ -1112,7 +1123,7 @@ class AvalonSimulator:
                     p.guess[mate] = "red"
                 for mate in blue_players:
                     p.guess[mate.id] = "blue"
-            print(p.id,p.role, '\n\n\n\n')
+            print(f"玩家 {p.id} 的角色是 {p.role}，队友是 {p.team_mates}")
         
         # 分配摩根角色
         if self.test_mode and self.p5_is_morgan:
@@ -1135,7 +1146,7 @@ class AvalonSimulator:
             role=morgan.role,
             is_ai=not morgan.is_human,
             character=morgan.character,
-            team_mates=','.join(p.team_mates),
+            team_mates=','.join(morgan.team_mates),
             strategy=morgan.strategy,
             morgan=True
         )
@@ -1187,7 +1198,7 @@ class AvalonSimulator:
             
         return self.game_history_header + '\n' + '\n'.join(self.game_history)
 
-    def run_ai_thinking(self, game_state: Dict) -> Dict[str, str]:
+    def run_ai_thinking(self, game_state: Dict, team_size: int) -> Dict[str, str]:
         """
         运行所有 AI 玩家的思考过程
         Args:
@@ -1199,7 +1210,7 @@ class AvalonSimulator:
         with ThreadPoolExecutor() as executor:
             # 提交所有非人类玩家的生成总结任务
             future_to_player = {
-                executor.submit(player.generate_summary, game_state=game_state, llm=player.llm): player.id
+                executor.submit(player.generate_summary, game_state=game_state, llm=player.llm, team_size=team_size): player.id
                 for player in self.players if not player.is_human
             }
             # 收集各任务的返回结果
