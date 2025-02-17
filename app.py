@@ -68,6 +68,12 @@ class GameManager:
         self.current_user = None
         print("GameManager initialized")
 
+    def set_language(self, lang):
+        """设置语言"""
+        if self.output:
+            self.output.send_message(f"Language set to: {lang}", "info")
+        print(f"Game manager language set to: {lang}")
+
     def reset_game(self):
         self.game = None
         self.input_queue = queue.Queue()
@@ -407,6 +413,17 @@ def create_game():
         p5_is_morgan=p5_is_morgan,
         human_player_id="P5" if include_human else None
     )
+
+@app.route('/set_language', methods=['POST'])
+def set_language():
+    lang = request.json.get('lang')
+    print(f"Language change request received: {lang}")  # 调试日志
+    if lang in ['en', 'zh']:
+        session['lang'] = lang
+        if game_manager:
+            game_manager.set_language(lang)
+        return jsonify({'status': 'success'})
+    return jsonify({'status': 'error', 'message': 'Unsupported language'})
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)

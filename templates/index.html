@@ -5,37 +5,199 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Avalon Online</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='i18n.js') }}"></script>
+    <!-- 添加 marked.js，确保在其他脚本之前加载 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@4.0.0/marked.min.js"></script>
+    <script>
+        // 全局变量
+        let currentLang = localStorage.getItem('lang') || 'zh';
+        let socket = null;
+        
+        function setLanguage(lang) {
+            console.log('Language change requested:', lang);  // 调试日志
+            currentLang = lang;
+            localStorage.setItem('lang', lang);
+            
+            fetch('/set_language', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ lang: lang })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    console.log('Language changed to:', lang);
+                    // 重新连接 socket，带上新的语言参数
+                    if (socket) {
+                        console.log('Disconnecting existing socket');
+                        socket.disconnect();
+                        socket = null;
+                    }
+                    console.log('Creating new socket connection with language:', lang);
+                    socket = io({
+                        query: { lang: lang }
+                    });
+                    setupSocketListeners();  // 重新设置 socket 监听器
+                    
+                    // 更新按钮状态
+                    document.getElementById('zh-btn').classList.toggle('active', lang === 'zh');
+                    document.getElementById('en-btn').classList.toggle('active', lang === 'en');
+                    updateUIText();
+                    if (document.getElementById('rules-content').style.display !== 'none') {
+                        loadRules();
+                    }
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+        
+        function getText(key, params = {}) {
+            let text = translations[currentLang][key];
+            if (!text) return key;  // 如果找不到翻译，返回key
+            // 替换参数
+            for (const [key, value] of Object.entries(params)) {
+                text = text.replace(`{${key}}`, value);
+            }
+            return text;
+        }
+        
+        function updateUIText() {
+            // 更新所有需要翻译的元素
+            document.querySelectorAll('[data-i18n]').forEach(element => {
+                const key = element.getAttribute('data-i18n');
+                const params = JSON.parse(element.getAttribute('data-i18n-params') || '{}');
+                element.textContent = getText(key, params);
+            });
+        }
+        
+        // 初始化 socket 连接
+        function initializeSocket() {
+            if (socket) {
+                console.log('Socket already exists, skipping initialization');
+                return;
+            }
+            console.log('Initializing socket with language:', currentLang);
+            socket = io({
+                query: { lang: currentLang }
+            });
+            setupSocketListeners();
+        }
+        
+        // 设置 socket 事件监听器
+        function setupSocketListeners() {
+            if (!socket) {
+                console.error('Cannot setup listeners: socket is null');
+                return;
+            }
+            socket.on('connect', () => {
+                console.log('Socket connected with language:', currentLang);
+            });
+        
+            socket.on('disconnect', () => {
+                console.log('Socket disconnected');
+            });
+        
+            socket.on('game_update', function(data) {
+                try {
+                    console.log('Received game update:', data);
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = `message ${data.type}`;
+                    messageDiv.textContent = data.message;
+                    
+                    // 如果是输入提示，显示输入框
+                    if (data.type === 'input_prompt') {
+                        const inputForm = document.createElement('form');
+                        const inputField = document.createElement('input');
+                        const submitButton = document.createElement('button');
+                        
+                        inputField.type = 'text';
+                        submitButton.textContent = '提交';
+                        
+                        inputForm.onsubmit = function(e) {
+                            e.preventDefault();
+                            const input = inputField.value;
+                            console.log('Sending player input:', input);  // 调试信息
+                            socket.emit('player_input', { input: input });
+                            inputField.value = '';
+                            inputForm.style.display = 'none';
+                        };
+                        
+                        inputForm.appendChild(inputField);
+                        inputForm.appendChild(submitButton);
+                        messageDiv.appendChild(inputForm);
+                    }
+                    
+                    const messagesDiv = document.getElementById('messages');
+                    if (messagesDiv) {
+                        messagesDiv.appendChild(messageDiv);
+                        messageDiv.scrollIntoView();
+                    } else {
+                        console.error('Messages container not found');
+                    }
+                } catch (error) {
+                    console.error('Error handling game update:', error);
+                }
+            });
+        }
+        
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            updateUIText();
+            initializeSocket();  // 初始化 socket 连接
+        });
+
+        async function loadRules() {
+            try {
+                const response = await fetch(`/rules/${currentLang}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                document.querySelector('.rules-text').innerHTML = marked.parse(data.content);
+            } catch (error) {
+                console.error('Error loading rules:', error);
+                document.querySelector('.rules-text').innerHTML = `
+                    <div class="error-message">
+                        <p>无法加载规则文件。</p>
+                        <p>Error: ${error.message}</p>
+                    </div>`;
+            }
+        }
+
+        function toggleRules() {
+            const rulesContent = document.getElementById('rules-content');
+            if (rulesContent.style.display === 'none') {
+                rulesContent.style.display = 'block';
+                loadRules();  // 加载规则内容
+            } else {
+                rulesContent.style.display = 'none';
+            }
+        }
+    </script>
 </head>
 <body>
     <div class="container">
-        <h1>DeepSeek Quest</h1>
+        <div class="language-selector">
+            <button onclick="setLanguage('zh')" class="lang-btn" id="zh-btn">中文</button>
+            <button onclick="setLanguage('en')" class="lang-btn" id="en-btn">English</button>
+        </div>
+        <h1 data-i18n="game_title"></h1>
         <div class="user-stats">
-            <h3>Welcome, {{ user.username }}</h3>
-            <div class="stats-container">
-                <div class="blue-stats">
-                    <h4>Blue Team Stats</h4>
-                    <p>Wins: {{ user.blue_wins }}</p>
-                    <p>Losses: {{ user.blue_losses }}</p>
-                    <p>Win Rate: {{ user.blue_winrate }}%</p>
-                </div>
-                <div class="red-stats">
-                    <h4>Red Team Stats</h4>
-                    <p>Wins: {{ user.red_wins }}</p>
-                    <p>Losses: {{ user.red_losses }}</p>
-                    <p>Win Rate: {{ user.red_winrate }}%</p>
-                </div>
-            </div>
-            <a href="{{ url_for('logout') }}" class="logout-btn">Logout</a>
+            <h3 data-i18n="welcome" data-i18n-params='{"username": "{{ user.username }}"}'></h3>
+            <a href="{{ url_for('logout') }}" class="logout-btn" data-i18n="logout"></a>
         </div>
         <div id="rules-section">
-            <button onclick="toggleRules()" class="rules-button">游戏规则</button>
+            <button onclick="toggleRules()" class="rules-button" data-i18n="rules_button"></button>
             <div id="rules-content" class="rules-modal" style="display: none;">
                 <div class="rules-modal-content">
                     <span class="close-button" onclick="toggleRules()">&times;</span>
-                    <h2>游戏规则</h2>
-                    <div class="rules-text">
-                        <游戏规则: 目前游戏是Quest的一个最简单的实现。3好2坏，没有特殊角色，五局三胜，第四局需要两张坏票。队长直接指定团队无需投票。坏人有可能会装好人投好票，好人只能投好票。>
-                    </div>
+                    <h2 data-i18n="rules_title"></h2>
+                    <div class="rules-text"></div>
                 </div>
             </div>
         </div>
@@ -46,71 +208,51 @@
                     <div class="checkbox-option">
                         <label>
                             <input type="checkbox" id="random-team-checkbox" checked onchange="toggleTeamSelection()">
-                            随机分配红蓝方
+                            <span data-i18n="random_team"></span>
                         </label>
                     </div>
                     <div class="checkbox-option">
                         <label>
                             <input type="checkbox" id="include-human-checkbox" onchange="updateGameOptions()">
-                            包含人类玩家 (P5)
+                            <span data-i18n="include_human"></span>
                         </label>
                     </div>
                     <div class="input-group">
-                        <label for="simulation-count">模拟次数：</label>
+                        <label for="simulation-count" data-i18n="simulation_count"></label>
                         <input type="number" id="simulation-count" value="1" min="1" max="100" title="请输入1-100之间的数字">
                     </div>
                     <div class="player-models">
-                        <h4>Player Models:</h4>
+                        <h4 data-i18n="player_model_settings">Player Model Settings</h4>
                         {% for i in range(1, 6) %}
                         <div class="player-model-select">
                             <label for="p{{i}}-model">P{{i}}:</label>
                             <select id="p{{i}}-model" class="model-select">
-                                <option value="chatgpt">OpenAI</option>
-                                <option value="ollama-32b">Ollama (DeepSeek-32B)</option>
-                                <option value="ollama-7b">Ollama (DeepSeek-7B)</option>
-                                <option value="glm-zero">GLM Zero</option>
+                                <option value="gemini" selected="selected">Gemini 2.0</option>
+                                <option value="chatgpt">ChatGPT</option>
                                 <option value="deepseek-reasoner">DeepSeek Reasoner</option>
-                                <option value="doubao-lite">Doubao Lite 32K</option>
-                                <option value="siliconflow">SiliconFlow</option>
-                                <option value="gemini">Gemini 2.0</option>
-                                <option value="fireworks">Deepseek R1-Fireworks</option>
+                                <option value="doubao-lite">豆包 Lite</option>
+                                <option value="glm-zero">GLM Zero</option>
+                                <option value="ollama-32b">Ollama 32B</option>
+                                <option value="ollama-7b">Ollama 7B</option>
+                                <option value="siliconflow">Silicon Flow</option>
                             </select>
                             <select id="p{{i}}-team" class="team-select" disabled>
-                                <option value="random">随机</option>
-                                <option value="blue">蓝方</option>
-                                <option value="red">红方</option>
+                                <option value="random" data-i18n="team_random"></option>
+                                <option value="blue" data-i18n="team_blue"></option>
+                                <option value="red" data-i18n="team_red"></option>
                             </select>
                         </div>
                         {% endfor %}
                     </div>
                 </div>
+            </div>
             {% endif %}
-            <button onclick="startGame()">Start New Game</button>
+            <button onclick="startGame()" data-i18n="start_new_game"></button>
             {% if user and user.is_admin %}
-            <button onclick="startTestGame()" class="test-button">Start Test Game</button>
-            <div class="test-options">
-                <div class="test-checkbox">
-                    <label>
-                        <input type="checkbox" id="p5-morgan-checkbox" onchange="updateTestOptions()">
-                        将P5设为摩根
-                    </label>
-                </div>
-            </div>
-            <div class="model-select">
-                <label for="model-choice">选择模型:</label>
-                <select id="model-choice" onchange="changeModel(this.value)">
-                    <option value="chatgpt">OpenAI</option>
-                    <option value="ollama-32b">Ollama (DeepSeek-32B)</option>
-                    <option value="ollama-7b">Ollama (DeepSeek-7B)</option>
-                    <option value="glm-zero">GLM Zero</option>
-                    <option value="deepseek-reasoner">DeepSeek Reasoner</option>
-                    <option value="doubao-lite">Doubao Lite 32K</option>
-                    <option value="siliconflow">SiliconFlow</option>
-                </select>
-            </div>
+            <button onclick="startTestGame()" class="test-button" data-i18n="start_test_game"></button>
             <div class="export-controls">
-                <button onclick="exportData('excel')" class="export-button">Export to Excel</button>
-                <button onclick="exportData('training')" class="export-button">Export Training Data</button>
+                <button onclick="exportData('excel')" class="export-button" data-i18n="export_excel"></button>
+                <button onclick="exportData('training')" class="export-button" data-i18n="export_training"></button>
             </div>
             {% endif %}
         </div>
@@ -133,67 +275,6 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script>
-    const socket = io();
-
-    // 添加连接状态监听
-    socket.on('connect', () => {
-        console.log('Connected to server');
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Disconnected from server');
-    });
-
-    socket.on('connect_error', (error) => {
-        console.error('Connection error:', error);
-    });
-
-    socket.on('error', (error) => {
-        console.error('Socket error:', error);
-    });
-
-    socket.on('game_update', function(data) {
-        try {
-            console.log('Received game update:', data);  // 调试信息
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${data.type}`;
-            messageDiv.textContent = data.message;
-            
-            // 如果是输入提示，显示输入框
-            if (data.type === 'input_prompt') {
-                const inputForm = document.createElement('form');
-                const inputField = document.createElement('input');
-                const submitButton = document.createElement('button');
-                
-                inputField.type = 'text';
-                submitButton.textContent = '提交';
-                
-                inputForm.onsubmit = function(e) {
-                    e.preventDefault();
-                    const input = inputField.value;
-                    console.log('Sending player input:', input);  // 调试信息
-                    socket.emit('player_input', { input: input });
-                    inputField.value = '';
-                    inputForm.style.display = 'none';
-                };
-                
-                inputForm.appendChild(inputField);
-                inputForm.appendChild(submitButton);
-                messageDiv.appendChild(inputForm);
-            }
-            
-            const messagesDiv = document.getElementById('messages');
-            if (messagesDiv) {
-                messagesDiv.appendChild(messageDiv);
-                messageDiv.scrollIntoView();
-            } else {
-                console.error('Messages container not found');
-            }
-        } catch (error) {
-            console.error('Error handling game update:', error);
-        }
-    });
-
     function toggleTeamSelection() {
         const randomTeam = document.getElementById('random-team-checkbox').checked;
         const teamSelects = document.querySelectorAll('.team-select');
@@ -245,15 +326,6 @@
             });
         } catch (error) {
             console.error('Error starting game:', error);
-        }
-    }
-
-    function toggleRules() {
-        const rulesContent = document.getElementById('rules-content');
-        if (rulesContent.style.display === 'none') {
-            rulesContent.style.display = 'block';
-        } else {
-            rulesContent.style.display = 'none';
         }
     }
 
@@ -314,25 +386,6 @@
                 }
             })
             .catch(error => console.error('Error exporting data:', error));
-    }
-
-    function changeModel(model) {
-        fetch('/change_model', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ model: model })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                console.log('Model changed successfully');
-                // 重新初始化游戏
-                socket.emit('start_game');
-            }
-        })
-        .catch(error => console.error('Error:', error));
     }
 
     function updateGameOptions() {

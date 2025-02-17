@@ -240,6 +240,7 @@ button {
     display: flex;
     justify-content: space-around;
     margin: 20px 0;
+    display: none;  /* 隐藏战绩统计 */
 }
 
 .blue-stats, .red-stats {
@@ -260,6 +261,7 @@ button {
 .model-select {
     margin: 15px 0;
     text-align: center;
+    display: none;  /* 只隐藏全局的模型选择 */
 }
 
 .model-select select {
@@ -280,6 +282,7 @@ button {
     display: flex;
     flex-direction: column;
     gap: 10px;
+    display: none;  /* 隐藏测试选项，包括"将p5设置为摩根" */
 }
 
 .test-checkbox {
@@ -346,6 +349,7 @@ button {
     padding: 10px;
     background: rgba(255, 255, 255, 0.1);
     border-radius: 4px;
+    display: block;  /* 确保玩家模型选择区域显示 */
 }
 
 .player-models h4 {
@@ -372,6 +376,7 @@ button {
     color: #fff;
     border: 1px solid #444;
     border-radius: 4px;
+    display: inline-block;  /* 确保选择框显示 */
 }
 
 .team-select {
