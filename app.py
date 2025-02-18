@@ -428,11 +428,34 @@ def create_game():
 @socketio.on('switch_language')
 def handle_language_switch(data):
     lang = data.get('lang', 'zh')
-    print(f"Language switch requested: {lang}")
-    game_manager.output.set_language(lang)
-    if game_manager.game:
+    print(f"Switching language to: {lang}")
+    if game_manager and game_manager.game:
         game_manager.game.lang = lang
-        print(f"Game language updated: {game_manager.game.lang}")
+        game_manager.output.set_language(lang)
+        return {'status': 'success', 'message': f'Language switched to {lang}'}
+
+@app.route('/set_language', methods=['POST'])
+def set_language():
+    try:
+        data = request.get_json()
+        lang = data.get('lang', 'zh')
+        print(f"Setting language to: {lang}")
+        
+        # 更新游戏管理器的语言设置
+        if game_manager and game_manager.game:
+            game_manager.game.lang = lang
+            game_manager.output.set_language(lang)
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Language switched to {lang}'
+        })
+    except Exception as e:
+        print(f"Error setting language: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)

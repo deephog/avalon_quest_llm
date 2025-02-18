@@ -415,3 +415,29 @@ button {
 .rules-modal-content::-webkit-scrollbar-thumb:hover {
     background: #555;
 }
+
+/* 语言按钮样式 */
+.language-buttons {
+    display: flex;
+    gap: 10px;
+    margin: 10px 0;
+}
+
+.lang-btn {
+    padding: 8px 16px;
+    background-color: #333;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.lang-btn:hover {
+    background-color: #444;
+}
+
+.lang-btn.active {
+    background-color: #4CAF50;
+    border-color: #4CAF50;
+}

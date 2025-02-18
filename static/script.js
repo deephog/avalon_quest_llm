@@ -78,10 +78,25 @@ function startGame() {
     }
 }
 
-function switchLanguage(lang) {
+function setLanguage(lang) {
+    console.log('Language change requested:', lang);
     currentLang = lang;
     localStorage.setItem('gameLang', lang);
-    socket.emit('switch_language', {lang: lang});
+    
+    // 更新按钮状态
+    document.getElementById('zh-btn').classList.toggle('active', lang === 'zh');
+    document.getElementById('en-btn').classList.toggle('active', lang === 'en');
+
+    // 直接使用 socket.io 发送语言切换事件
+    socket.emit('switch_language', { lang: lang });
+
+    // 更新界面文本
+    updateUIText();
+
+    // 如果规则面板打开，重新加载规则
+    if (document.getElementById('rules-content').style.display !== 'none') {
+        loadRules();
+    }
 }
 
 socket.on('input_active', (data) => {
