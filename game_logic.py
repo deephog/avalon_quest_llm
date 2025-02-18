@@ -20,7 +20,6 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask_migrate import Migrate
 #from app import db  # 导入数据库实例
-import google.generativeai as genai
 from config import Config
 from game_messages import GAME_MESSAGES
 
@@ -105,12 +104,6 @@ class Player:
                     api_key=Config.GEMINI_API_KEY,
                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
                 )
-            
-                #ChatGoogleGenerativeAI(
-                #    model="gemini-pro",
-                #    google_api_key=Config.GEMINI_API_KEY,
-                #    convert_system_message_to_human=True
-                #)
             elif self.model_api == 'ollama-32b':
                 return OllamaAdapter(model_name="deepseek-r1:32b", temperature=0.8)
             elif self.model_api == 'ollama-7b':
@@ -198,8 +191,8 @@ class Player:
         game_history = game_state['game_history']
         is_leader = game_state['leader_id'] == self.id
         required_team_size = team_size  # 获取本轮需要的队员数量
-        leader_tasks = ""
-        leader_output_format = ""
+        leader_info = ""
+        leader_task = ""
 
         def validate_leader_response(response: str) -> bool:
             if not ("TeamSelection:" in response and "MagicTarget:" in response):
@@ -249,7 +242,7 @@ class Player:
                 return False
 
         if is_leader:
-            leader_tasks = f"""
+            leader_info = f"""
                 队长附加任务：作为本轮队长，你需要额外完成以下任务：
                 1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
                   - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
@@ -265,7 +258,7 @@ class Player:
                 - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
                 """
             
-            leader_output_format = """
+            leader_task = """
                 TeamSelection:
                 [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5]
                 
@@ -274,7 +267,7 @@ class Player:
             """
 
         if self.role == 'red':
-            prompt = f"""
+            prompt_info = f"""
                 你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
                 
                 {game_history}
@@ -312,20 +305,25 @@ class Player:
                 二、 生成下一轮发言：
                 用"NextSpeech:"开头给出一段100-200个字的发言，可以根据策略自由发挥，混淆视听，千万不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
                 发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-
-                {leader_tasks if is_leader else ""}
-
+                """
+            
+            prompt_task = f"""
                 请按以下格式输出：
                 Summary:
                 [在这里输出500字以内的局势和策略分析]
 
                 NextSpeech:
                 [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，符合你的策略风格{self.strategy}和性格特点{self.character}]
-
-                {leader_output_format if is_leader else ""}
                 """
+
+
+            if is_leader:
+                prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
+            else:
+                prompt = "\n".join([prompt_info, prompt_task])
+                
         else:
-            prompt = f"""
+            prompt_info = f"""
                     你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
                     
                     {game_history}
@@ -370,9 +368,9 @@ class Player:
                     用"NextSpeech:"开头给出一段100-200个字的发言，相信和怀疑的目标尽可能与你的怀疑清单一致。
                     如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
                     发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-
-                    {leader_tasks if is_leader else ""}
-
+                    """
+            
+            prompt_task = f"""
                     请按以下格式输出：
                     Summary:
                     [在这里输出500字以内的局势和策略分析]
@@ -383,10 +381,17 @@ class Player:
 
                     NextSpeech:
                     [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
-
-                    {leader_output_format if is_leader else ""}
                     """
+            
+            if is_leader:
+                prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
+            else:
+                prompt = "\n".join([prompt_info, prompt_task])
+
         # 生成响应，如果是队长且响应不符合要求则重试
+        print("Debug: About to print prompt")
+        print(prompt)
+        print("Debug: Finished printing prompt")
         max_retries = 5
         retry_count = 0
         while True:
