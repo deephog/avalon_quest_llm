@@ -408,7 +408,68 @@ class Player:
                 prompt = "\n".join([prompt_info, prompt_task])
                 
         else:
-            prompt_info = f"""
+            if self.game_lang == 'en':
+                prompt_info = f"""
+                    You are playing the Quest board game. Your ID is {self.id}, you are on the {self.role} team. Current round: {game_state['round']+1}. Game history:
+                    
+                    {game_history}
+
+                    Your ID: {self.id}
+
+                    Current round leader ID: {game_state['leader_id']}
+
+                    All players: P1 P2 P3 P4 P5
+
+                    Recent information and chat history (empty if this is the first round):
+                    {self._get_current_memory()}
+
+                    Personal analysis history review:
+                    {self._get_summary_history()}
+
+                    Game rules review:
+                    {self.rules_text}
+
+                    Your playing strategy style: {self.strategy}
+
+                    Please complete the following tasks:
+
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    
+                    1. Analyze and summarize the current situation:
+                    As a blue team player, please analyze the following content and output your analysis starting with "Summary:":
+                    1. Analyze suspicious players based on all past task performances, team selections, leader transfers, and magic token usage.
+                    2. Determine if Morgana has been targeted by magic - Morgana can ignore magic token restrictions and still play fail cards, while other red players must play success cards when targeted.
+                    3. Note that players who have been leader cannot be chosen as leader again when analyzing leader transfer history.
+                    4. Consider whether to trust other players' speeches or analyze them in reverse based on your identity guesses.
+                    5. List your current suspects and reasoning. Since there are only two red players, you should not have more than two main suspects.
+                    6. Try to convince other blue players that you are on the blue team and get them to include you in missions.
+                    7. Plan your strategy for upcoming rounds.
+                    
+                    2. Update your guesses about other players' identities, starting with "Guess:":
+                    Guess 0-2 players most likely to be red from all players except yourself.
+                    Then determine if the remaining players are blue or uncertain.
+                    If this is the first round with insufficient information, you may not suspect anyone of being red.
+                    
+                    3. Generate your next speech:
+                    Start with "NextSpeech:" and give a 100-200 word speech. Your trust and suspicions should align with your guess list.
+                    If this is the first round with insufficient information, you may not express trust or suspicion of anyone.
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches.
+                    """
+
+                prompt_task = f"""
+                    Please output in the following format:
+                    Summary:
+                    [Output your situation analysis here, within 500 words]
+                    
+                    Guess:
+                    // Your guesses for all players except yourself, values can only be "red", "blue" or "unknown", example:
+                    {{"P1": "blue", "P2": "red", "P3": "unknown"}}
+
+                    NextSpeech:
+                    [Output your next round speech here, 100-200 words. Base it on your analysis, your identity guesses, and match your strategy style {self.strategy} and character trait {self.character}]
+                    """
+            else:
+                prompt_info = f"""
                     你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
                     
                     {game_history}
@@ -668,6 +729,13 @@ class AvalonSimulator:
         self.player_teams = player_teams or {}
         self.lang = getattr(output, 'lang', 'zh')  # 获取输出语言，默认中文
         
+        # 添加游戏历史记录表头的中英文版本
+        self.game_history_headers = {
+            'zh': "| 轮次 | 队长 | 任务队员 | 魔法目标 | 任务结果 | 失败票数 |\n|------|------|----------|-----------|----------|----------|",
+            'en': "| Round | Leader | Team | Magic Target | Result | Fails |\n|--------|---------|------|--------------|---------|--------|"
+        }
+        self.game_history_header = self.game_history_headers.get(self.lang, self.game_history_headers['zh'])
+        
         print(f"Initializing game in {'test' if test_mode else 'normal'} mode")
         print(f"Human player ID: {self.human_player_id}")
         
@@ -715,7 +783,6 @@ class AvalonSimulator:
 
         # 添加游戏历史记录
         self.game_history = []
-        self.game_history_header = "| 轮次 | 队长 | 任务队员 | 魔法目标 | 任务结果 | 失败票数 |\n|------|------|----------|-----------|----------|----------|"
 
     def _initialize_players(self, human_player_id: str):
         """初始化玩家列表"""
@@ -1276,7 +1343,10 @@ class AvalonSimulator:
         round_num = len(self.game_history) + 1
         team_str = ', '.join(sorted(team))  # 排序以保持一致性
         magic_str = magic_target if magic_target else '-'
-        result_str = f"成功(蓝方胜)" if result == "success" else "失败(红方胜)"
+        if self.lang == 'en':
+            result_str = "Success(Blue wins)" if result == "success" else "Fail(Red wins)"
+        else:
+            result_str = "成功(蓝方胜)" if result == "success" else "失败(红方胜)"
         
         history_entry = f"| {round_num} | {leader_id} | {team_str} | {magic_str} | {result_str} | {fail_votes} |"
         self.game_history.append(history_entry)
@@ -1286,7 +1356,7 @@ class AvalonSimulator:
         获取格式化的游戏历史记录
         """
         if not self.game_history:
-            return "游戏刚刚开始，还没有历史记录。"
+            return "No game history yet." if self.lang == 'en' else "游戏刚刚开始，还没有历史记录。"
             
         return self.game_history_header + '\n' + '\n'.join(self.game_history)
 
