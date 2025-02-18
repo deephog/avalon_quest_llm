@@ -22,57 +22,12 @@ from flask_migrate import Migrate
 #from app import db  # 导入数据库实例
 import google.generativeai as genai
 from config import Config
+from game_messages import GAME_MESSAGES
 
 os.environ["OPENAI_API_KEY"] = "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"
 CHARACTER = ['沉稳']#['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
 STRATEGY = ['稳定']#['激进', '保守', '稳定']
 _model_api = 'chatgpt'  # 私有变量
-
-# 游戏提示语翻译
-GAME_MESSAGES = {
-    'zh': {
-        'game_start': '游戏开始！',
-        'round_start': '第 {} 轮开始',
-        'leader_select': '请 {} 选择任务队员',
-        'team_selected': '{} 选择了队员: {}',
-        'random_leader': '第{}轮 随机选择 {}作为队长',
-        'discussion_phase': '=== 讨论阶段 ===',
-        'next_leader': '{}选择了 {}作为下一轮队长',
-        'ai_thinking': 'AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...',
-        'blue_victory': '蓝方已获得三次胜利，游戏结束',
-        'game_over': '=== 游戏结束 ===',
-        'final_score': '最终比分：蓝方 {} 胜 | 红方 {} 胜',
-        'final_winner': '最终胜利方：{}方',
-        'reveal_roles': '玩家身份揭晓：',
-        'voting_start': '开始投票',
-        'mission_success': '任务成功！蓝方胜利，当前比分 蓝方{}胜 : 红方{}胜',
-        'mission_fail': '任务失败！红方胜利，当前比分 蓝方{}胜 : 红方{}胜',
-        'magic_used': '{} 对 {} 使用了魔法指示物',
-        'success_votes': '任务成功票数：{}',
-        'fail_votes': '任务失败票数：{}'
-    },
-    'en': {
-        'game_start': 'Game Start!',
-        'round_start': 'Round {} Begins',
-        'leader_select': 'Player {} please select team members',
-        'team_selected': '{} selected team members: {}',
-        'random_leader': 'Round {} - {} randomly selected as leader',
-        'discussion_phase': '=== Discussion Phase ===',
-        'next_leader': '{} selected {} as next round leader',
-        'ai_thinking': 'AI players are thinking, this may take a few minutes...',
-        'blue_victory': 'Blue team has won three missions, game over',
-        'game_over': '=== Game Over ===',
-        'final_score': 'Final Score: Blue {} wins | Red {} wins',
-        'final_winner': 'Final Winner: {} Team',
-        'reveal_roles': 'Player Roles Revealed:',
-        'voting_start': 'Voting begins',
-        'mission_success': 'Mission Success! Blue Team wins. Current score - Blue:{} Red:{}',
-        'mission_fail': 'Mission Failed! Red Team wins. Current score - Blue:{} Red:{}',
-        'magic_used': '{} used magic token on {}',
-        'success_votes': 'Success votes: {}',
-        'fail_votes': 'Fail votes: {}'
-    }
-}
 
 class OllamaAdapter:
     def __init__(self, model_name: str, temperature: float = 0.5):
