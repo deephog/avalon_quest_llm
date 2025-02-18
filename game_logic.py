@@ -516,18 +516,18 @@ class Player:
                     发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
                     """
             
-            prompt_task = f"""
-                    请按以下格式输出：
-                    Summary:
-                    [在这里输出500字以内的局势和策略分析]
-                    
-                    Guess:
-                    // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
-                    {{"P1": "blue", "P2": "red", "P3": "unknown"}}
+                prompt_task = f"""
+                        请按以下格式输出：
+                        Summary:
+                        [在这里输出500字以内的局势和策略分析]
+                        
+                        Guess:
+                        // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
+                        {{"P1": "blue", "P2": "red", "P3": "unknown"}}
 
-                    NextSpeech:
-                    [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
-                    """
+                        NextSpeech:
+                        [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
+                        """
             
             if is_leader:
                 prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
@@ -775,10 +775,12 @@ class AvalonSimulator:
         
         # 读取游戏规则
         try:
-            with open("game_rules.md", encoding="utf-8") as f:
+            rules_file = "game_rules_en.md" if self.lang == 'en' else "game_rules.md"
+            with open(rules_file, encoding="utf-8") as f:
                 self.rules_text = f.read()
         except Exception as e:
-            self.rules_text = "无法读取游戏规则。"
+            error_msg = "Unable to read game rules." if self.lang == 'en' else "无法读取游戏规则。"
+            self.rules_text = error_msg
             self.output.send_message(f"读取游戏规则失败: {e}", "error")
 
         # 添加游戏历史记录
