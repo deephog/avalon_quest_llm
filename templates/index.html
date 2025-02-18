@@ -15,9 +15,6 @@
         
         function setLanguage(lang) {
             console.log('Language change requested:', lang);  // 调试日志
-            currentLang = lang;
-            localStorage.setItem('lang', lang);
-            
             fetch('/set_language', {
                 method: 'POST',
                 headers: {
@@ -31,11 +28,8 @@
                     console.log('Language changed to:', lang);
                     // 重新连接 socket，带上新的语言参数
                     if (socket) {
-                        console.log('Disconnecting existing socket');
                         socket.disconnect();
-                        socket = null;
                     }
-                    console.log('Creating new socket connection with language:', lang);
                     socket = io({
                         query: { lang: lang }
                     });

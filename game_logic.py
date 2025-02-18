@@ -28,6 +28,52 @@ CHARACTER = ['沉稳']#['活泼', '激动', '沉稳', '粗鲁', '直白', '城�
 STRATEGY = ['稳定']#['激进', '保守', '稳定']
 _model_api = 'chatgpt'  # 私有变量
 
+# 游戏提示语翻译
+GAME_MESSAGES = {
+    'zh': {
+        'game_start': '游戏开始！',
+        'round_start': '第 {} 轮开始',
+        'leader_select': '请 {} 选择任务队员',
+        'team_selected': '{} 选择了队员: {}',
+        'random_leader': '第{}轮 随机选择 {}作为队长',
+        'discussion_phase': '=== 讨论阶段 ===',
+        'next_leader': '{}选择了 {}作为下一轮队长',
+        'ai_thinking': 'AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...',
+        'blue_victory': '蓝方已获得三次胜利，游戏结束',
+        'game_over': '=== 游戏结束 ===',
+        'final_score': '最终比分：蓝方 {} 胜 | 红方 {} 胜',
+        'final_winner': '最终胜利方：{}方',
+        'reveal_roles': '玩家身份揭晓：',
+        'voting_start': '开始投票',
+        'mission_success': '任务成功！蓝方胜利，当前比分 蓝方{}胜 : 红方{}胜',
+        'mission_fail': '任务失败！红方胜利，当前比分 蓝方{}胜 : 红方{}胜',
+        'magic_used': '{} 对 {} 使用了魔法指示物',
+        'success_votes': '任务成功票数：{}',
+        'fail_votes': '任务失败票数：{}'
+    },
+    'en': {
+        'game_start': 'Game Start!',
+        'round_start': 'Round {} Begins',
+        'leader_select': 'Player {} please select team members',
+        'team_selected': '{} selected team members: {}',
+        'random_leader': 'Round {} - {} randomly selected as leader',
+        'discussion_phase': '=== Discussion Phase ===',
+        'next_leader': '{} selected {} as next round leader',
+        'ai_thinking': 'AI players are thinking, this may take a few minutes...',
+        'blue_victory': 'Blue team has won three missions, game over',
+        'game_over': '=== Game Over ===',
+        'final_score': 'Final Score: Blue {} wins | Red {} wins',
+        'final_winner': 'Final Winner: {} Team',
+        'reveal_roles': 'Player Roles Revealed:',
+        'voting_start': 'Voting begins',
+        'mission_success': 'Mission Success! Blue Team wins. Current score - Blue:{} Red:{}',
+        'mission_fail': 'Mission Failed! Red Team wins. Current score - Blue:{} Red:{}',
+        'magic_used': '{} used magic token on {}',
+        'success_votes': 'Success votes: {}',
+        'fail_votes': 'Fail votes: {}'
+    }
+}
+
 class OllamaAdapter:
     def __init__(self, model_name: str, temperature: float = 0.5):
         """
@@ -250,11 +296,11 @@ class Player:
         if is_leader:
             leader_tasks = f"""
                 队长附加任务：作为本轮队长，你需要额外完成以下任务：
-                1. 在“请按以下格式输出的”提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
+                1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
                   - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
                   - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: Px Py"
 
-                2. 在“请按以下格式输出的”提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
+                2. 在"请按以下格式输出的"提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
                   - 目标必须是你选择的队员之一或你自己
                   - 示例格式："MagicTarget: Px"
                 
@@ -625,6 +671,8 @@ class AvalonSimulator:
         self.game_history = []
         self.game_history_header = "| 轮次 | 队长 | 任务队员 | 魔法目标 | 任务结果 | 失败票数 |\n|------|------|----------|-----------|----------|----------|"
 
+        self.lang = getattr(output, 'lang', 'zh')  # 获取输出语言，默认中文
+
     def _initialize_players(self, human_player_id: str):
         """初始化玩家列表"""
         players = []
@@ -677,7 +725,7 @@ class AvalonSimulator:
 
     def discussion_phase(self):
         """讨论阶段"""
-        self.output.send_message("=== 讨论阶段 ===", 'action')
+        self.output.send_message(self.get_message('discussion_phase'), 'action')
         
         # 获取所有玩家的发言
         speeches = {}  # 只存储每个玩家的发言内容
@@ -717,13 +765,13 @@ class AvalonSimulator:
                 # 测试模式下，P5作为第一个队长
                 self.current_leader_index = 4  # P5的索引
                 self.leaders.append("P5")
-                self.output.send_message(f"第{self.round + 1}轮 P5作为首个队长", 'action')
+                self.output.send_message(self.get_message('random_leader', self.round + 1, self.players[self.current_leader_index].id), 'action')
             else:
                 # 随机选择第一个队长
                 first_leader = random.choice(self.players)
                 self.current_leader_index = self.players.index(first_leader)
                 self.leaders.append(first_leader.id)
-                self.output.send_message(f"第{self.round + 1}轮 随机选择 {first_leader.id}作为队长", 'action')
+                self.output.send_message(self.get_message('random_leader', self.round + 1, first_leader.id), 'action')
 
         #Generate initial summaries and speeches for all players
         if self.round == 0:
@@ -746,7 +794,7 @@ class AvalonSimulator:
             llm=leader.llm
         )
         print(f"propose_team 返回的队伍: {team}")
-        self.output.send_message(f"{leader.id}指定队伍：{team}", 'info')
+        self.output.send_message(self.get_message('team_selected', leader.id, ', '.join(team)), 'info')
 
         # 队长选择魔法指示物目标
         if leader.is_human:
@@ -763,7 +811,7 @@ class AvalonSimulator:
         # 因为 amulet 是强制使用的，直接设置
         amulet_target.has_amulet = True
         self.last_amulet_player = amulet_target.id
-        self.output.send_message(f"{leader.id} 对 {amulet_target.id} 使用了魔法指示物", 'action')
+        self.output.send_message(self.get_message('magic_used', leader.id, amulet_target.id), 'action')
 
         # 执行任务
         success_votes = 0
@@ -780,8 +828,8 @@ class AvalonSimulator:
             else:
                 fail_votes += 1
 
-        self.output.send_message(f"任务成功票数：{success_votes}", 'info')
-        self.output.send_message(f"任务失败票数：{fail_votes}", 'info')
+        self.output.send_message(self.get_message('success_votes', success_votes), 'info')
+        self.output.send_message(self.get_message('fail_votes', fail_votes), 'info')
         self.last_fail_votes = fail_votes
 
         # 判断任务结果
@@ -794,10 +842,10 @@ class AvalonSimulator:
         # 更新胜负次数
         if success:
             self.blue_wins += 1
-            self.output.send_message(f"任务成功！蓝方胜利，当前比分 蓝方{self.blue_wins}胜 : 红方{self.red_wins}胜", "result")
+            self.output.send_message(self.get_message('mission_success', self.blue_wins, self.red_wins), "result")
         else:
             self.red_wins += 1
-            self.output.send_message(f"任务失败！红方胜利，当前比分 蓝方{self.blue_wins}胜 : 红方{self.red_wins}胜", "result")
+            self.output.send_message(self.get_message('mission_fail', self.blue_wins, self.red_wins), "result")
 
         self.last_team = team
         self.last_result = "成功" if success else "失败"
@@ -821,7 +869,7 @@ class AvalonSimulator:
         # 记录新队长的id（确保每位玩家在一个周期只做一次队长）
         if next_leader_obj.id not in self.leaders:
             self.leaders.append(next_leader_obj.id)
-        self.output.send_message(f"{leader.id}选择了 {next_leader_obj.id}作为下一轮队长", 'action')
+        self.output.send_message(self.get_message('next_leader', leader.id, next_leader_obj.id), 'info')
         
         # 将队长选择信息添加到所有玩家的记忆中
         for player in self.players:
@@ -867,10 +915,10 @@ class AvalonSimulator:
         if self.red_wins == 3:
             self.output.send_message("红方已获得三次胜利，蓝方玩家进行最后分析...", "action")
         elif self.blue_wins == 3:
-            self.output.send_message("蓝方已获得三次胜利，游戏结束", "action")
+            self.output.send_message(self.get_message('blue_victory'), "action")
             return False
         else:
-            self.output.send_message("AI玩家思考中，过程可能会持续几分钟，请稍安勿躁...", 'action')
+            self.output.send_message(self.get_message('ai_thinking'), 'info')
         
         ai_summaries = self.run_ai_thinking(self.get_game_state(), self.task_sizes[min(self.round+1, 4)])
         
@@ -994,10 +1042,10 @@ class AvalonSimulator:
             self.final_winner = "blue"
             
         # 统一的游戏结果公布
-        self.output.send_message("=== 游戏结束 ===", 'result')
-        self.output.send_message(f"最终比分：蓝方 {self.blue_wins} 胜 | 红方 {self.red_wins} 胜", 'result')
-        self.output.send_message(f"最终胜利方：{'蓝方' if self.final_winner == 'blue' else '红方'}", 'result')
-        self.output.send_message("玩家身份揭晓：", 'result')
+        self.output.send_message(self.get_message('game_over'), "result")
+        self.output.send_message(self.get_message('final_score', self.blue_wins, self.red_wins), "result")
+        self.output.send_message(self.get_message('final_winner', self.final_winner), "result")
+        self.output.send_message(self.get_message('reveal_roles'), "info")
         for p in self.players:
             self.output.send_message(f"{p.id}: {p.role}", 'result')
         
@@ -1223,6 +1271,11 @@ class AvalonSimulator:
                     result = "总结生成失败"
                 ai_summaries[player_id] = result
         return ai_summaries
+
+    def get_message(self, key, *args):
+        """获取当前语言的消息"""
+        message_template = GAME_MESSAGES.get(self.lang, GAME_MESSAGES['zh'])[key]
+        return message_template.format(*args) if args else message_template
 
 def set_model_api(model: str):
     """设置全局模型 API"""

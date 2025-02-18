@@ -71,7 +71,7 @@ class GameManager:
     def set_language(self, lang):
         """设置语言"""
         if self.output:
-            self.output.send_message(f"Language set to: {lang}", "info")
+            self.output.set_language(lang)
         print(f"Game manager language set to: {lang}")
 
     def reset_game(self):
@@ -190,7 +190,10 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
-    print("Client connected")  # 调试信息
+    lang = request.args.get('lang', 'zh')
+    print(f"Client connected with language: {lang}")
+    if game_manager and game_manager.output:
+        game_manager.output.set_language(lang)
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -417,11 +420,14 @@ def create_game():
 @app.route('/set_language', methods=['POST'])
 def set_language():
     lang = request.json.get('lang')
-    print(f"Language change request received: {lang}")  # 调试日志
+    print(f"Language change request received: {lang}")
     if lang in ['en', 'zh']:
         session['lang'] = lang
         if game_manager:
             game_manager.set_language(lang)
+            if game_manager.game:
+                game_manager.game.lang = lang
+                print(f"Game language set to: {lang}")  # 调试日志
         return jsonify({'status': 'success'})
     return jsonify({'status': 'error', 'message': 'Unsupported language'})
 
