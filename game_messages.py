@@ -19,7 +19,13 @@ GAME_MESSAGES = {
         'mission_fail': '任务失败！红方胜利，当前比分 蓝方{}胜 : 红方{}胜',
         'magic_used': '{} 对 {} 使用了魔法指示物',
         'success_votes': '任务成功票数：{}',
-        'fail_votes': '任务失败票数：{}'
+        'fail_votes': '任务失败票数：{}',
+        'final_identification_phase': '=== 最终指认阶段 ===',
+        'blue_team_identify': '好人阵营请指认所有红方成员',
+        'identify_prompt': '请指认你认为是红方的两位玩家（例如：P1 P2）：',
+        'wrong_identification': '玩家 {} 的指认有误：{} 不全在正确红方 {} 中',
+        'blue_identification_success': '指认阶段结束：蓝队的反败为胜成立。',
+        'red_identification_success': '指认阶段结束：红队成功防守。',
     },
     'en': {
         'game_start': 'Game Start!',
@@ -40,6 +46,12 @@ GAME_MESSAGES = {
         'mission_fail': 'Mission Failed! Red Team wins. Current score - Blue:{} Red:{}',
         'magic_used': '{} used magic token on {}',
         'success_votes': 'Success votes: {}',
-        'fail_votes': 'Fail votes: {}'
+        'fail_votes': 'Fail votes: {}',
+        'final_identification_phase': '=== Final Identification Phase ===',
+        'blue_team_identify': 'Blue team members, please identify all Red team members',
+        'identify_prompt': 'Please identify two players you think are on the Red team (e.g., P1 P2):',
+        'wrong_identification': 'Player {} identification is incorrect: {} is not entirely in the correct Red team {}',
+        'blue_identification_success': 'Identification phase ended: Blue team successfully turned the tide.',
+        'red_identification_success': 'Identification phase ended: Red team successfully defended.',
     }
 } 

@@ -535,9 +535,7 @@ class Player:
                 prompt = "\n".join([prompt_info, prompt_task])
 
         # 生成响应，如果是队长且响应不符合要求则重试
-        print("Debug: About to print prompt")
-        print(prompt)
-        print("Debug: Finished printing prompt")
+  
         max_retries = 5
         retry_count = 0
         while True:
@@ -715,11 +713,14 @@ class Player:
         return red_guesses
 
 class AvalonSimulator:
+    _current_lang = 'zh'  # 静态语言设置
+      
     def __init__(self, output: GameOutput, human_player_id: str = "P5", 
                  test_mode: bool = False, p5_is_morgan: bool = False,
                  player_models: Dict[str, str] = None,
                  random_team: bool = True,
-                 player_teams: Dict[str, str] = None):
+                 player_teams: Dict[str, str] = None,
+                 lang: str = None):
         self.output = output
         self.test_mode = test_mode
         self.p5_is_morgan = p5_is_morgan
@@ -727,7 +728,8 @@ class AvalonSimulator:
         self.player_models = player_models or {}
         self.random_team = random_team
         self.player_teams = player_teams or {}
-        self.lang = getattr(output, 'lang', 'zh')  # 获取输出语言，默认中文
+        # 使用传入的语言设置，如果没有则从输出对象获取
+        self.lang = lang or getattr(output, 'lang', 'zh')
         
         # 添加游戏历史记录表头的中英文版本
         self.game_history_headers = {
@@ -835,6 +837,10 @@ class AvalonSimulator:
         self.current_game = Game()
         db.session.add(self.current_game)
         db.session.commit()
+        
+        # 保持当前语言设置
+        current_lang = self.lang
+        self.lang = current_lang
 
     def discussion_phase(self):
         """讨论阶段"""
@@ -935,7 +941,7 @@ class AvalonSimulator:
             if player_obj:
                 vote = self.get_mission_vote(player_obj)
             else:
-                vote = False  # 默认处理无效成员
+                raise ValueError(f"无效的成员ID: {member}")  # 默认处理无效成员
             if vote:
                 success_votes += 1
             else:
@@ -994,7 +1000,7 @@ class AvalonSimulator:
                 game=self.current_game,
                 round_number=self.round,
                 leader_id=leader.id,
-                team_members=','.join(team),
+                team_members='_'.join([','.join(team), amulet_target.id]),
                 fail_votes=fail_votes,
                 result='success' if success else 'fail'
             )
@@ -1185,8 +1191,8 @@ class AvalonSimulator:
 
     def final_identification(self):
         """最终指认阶段"""
-        self.output.send_message("=== 最终指认阶段 ===", 'action')
-        self.output.send_message("好人阵营请指认所有红方成员", 'info')
+        self.output.send_message(self.get_message('final_identification_phase'), 'action')
+        self.output.send_message(self.get_message('blue_team_identify'), 'info')
         
         # 获取实际红方玩家集合（统一大写）
         actual_reds = {p.id.upper() for p in self.players if p.role == "red"}
@@ -1195,7 +1201,7 @@ class AvalonSimulator:
         for player in self.players:
             if player.role == "blue":
                 if player.is_human:
-                    prompt = "请指认你认为是红方的两位玩家（例如：P1 P2）："
+                    prompt = self.get_message('identify_prompt')
                     answer = self.output.get_player_input(prompt, player.id)
                     # 将输入解析为集合，统一大写
                     guess_set = {x.strip().upper() for x in answer.split()}
@@ -1211,7 +1217,7 @@ class AvalonSimulator:
         # 条件1：所有蓝队玩家的猜测必须正确，即各自猜测集合应为实际红队的子集
         for pid, guess_set in blue_guesses.items():
             if not guess_set.issubset(actual_reds):
-                self.output.send_message(f"玩家 {pid} 的指认有误：{guess_set} 不全在正确红方 {actual_reds} 中", "result")
+                self.output.send_message(self.get_message('wrong_identification', pid, guess_set, actual_reds), "result")
                 self.final_winner = "red"
                 return
         
@@ -1221,10 +1227,10 @@ class AvalonSimulator:
             union_of_guesses.update(guess_set)
         if union_of_guesses == actual_reds:
             self.final_winner = "blue"
-            self.output.send_message("指认阶段结束：蓝队的反败为胜成立。", "action")
+            self.output.send_message(self.get_message('blue_identification_success'), "action")
         else:
             self.final_winner = "red"
-            self.output.send_message("指认阶段结束：红队成功防守。", "action")
+            self.output.send_message(self.get_message('red_identification_success'), "action")
 
     def assign_roles(self):
         print("Assigning roles with:", {

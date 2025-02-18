@@ -1,4 +1,5 @@
-const socket = io();
+let socket = io();
+let currentLang = localStorage.getItem('gameLang') || 'zh'; // 保存在本地存储中
 
 // 处理游戏更新
 socket.on('game_update', (data) => {
@@ -42,12 +43,46 @@ document.getElementById('send-button').addEventListener('click', () => {
     }
 });
 
+function startGame() {
+    try {
+        console.log('Starting game...');
+        const includeHuman = document.getElementById('include-human-checkbox').checked;
+        const randomTeam = document.getElementById('random-team-checkbox').checked;
+        let simulationCount = parseInt(document.getElementById('simulation-count').value);
+        
+        // 验证模拟次数
+        if (isNaN(simulationCount) || simulationCount < 1 || simulationCount > 100) {
+            console.warn('Invalid simulation count, using default value 1');
+            simulationCount = 1;
+            document.getElementById('simulation-count').value = '1';
+        }
+        
+        const playerModels = {};
+        const playerTeams = {};
+        
+        for (let i = 1; i <= 5; i++) {
+            playerModels[`P${i}`] = document.getElementById(`p${i}-model`).value;
+            playerTeams[`P${i}`] = document.getElementById(`p${i}-team`).value;
+        }
+        
+        socket.emit('start_game', {
+            include_human: includeHuman,
+            player_models: playerModels,
+            random_team: randomTeam,
+            player_teams: playerTeams,
+            simulation_count: simulationCount,
+            lang: currentLang  // 添加当前语言设置
+        });
+    } catch (error) {
+        console.error('Error starting game:', error);
+    }
+}
 
-document.getElementById('start-game').addEventListener('click', () => {
-    console.log("Start Game button clicked"); // 调试信息
-    socket.emit('start_game');
-    document.getElementById('start-game').disabled = true;
-});
+function switchLanguage(lang) {
+    currentLang = lang;
+    localStorage.setItem('gameLang', lang);
+    socket.emit('switch_language', {lang: lang});
+}
 
 socket.on('input_active', (data) => {
     const inputSection = document.getElementById('input-section');

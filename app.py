@@ -62,9 +62,11 @@ with app.app_context():
         raise
 
 class GameManager:
+    _current_lang = 'zh'  # 添加静态语言设置
+
     def __init__(self):
+        self.output = WebSocketOutput(socketio, self)  # 不在这里设置默认语言
         self.reset_game()
-        self.output = WebSocketOutput(socketio, self)
         self.current_user = None
         print("GameManager initialized")
 
@@ -80,6 +82,7 @@ class GameManager:
         self.current_player = None
         self.awaiting_input = False
         self.current_round = 0
+        # 使用 WebSocketOutput 的静态语言设置
         self.output = WebSocketOutput(socketio, self)
 
     def run_game(self, test_mode=False, p5_is_morgan=False, player_models=None):
@@ -201,6 +204,9 @@ def handle_disconnect():
 
 @socketio.on('start_game')
 def handle_start_game(data):
+    print(f"Received start_game data: {data}")
+    lang = data.get('lang', 'zh')
+    print(f"Starting game with language: {lang}")
     include_human = data.get('include_human', True)
     player_models = data.get('player_models', {})
     random_team = data.get('random_team', True)
@@ -211,7 +217,7 @@ def handle_start_game(data):
     print(f"Simulation count: {simulation_count}")
     
     def run_multiple_games():
-        with app.app_context():  # 添加应用上下文
+        with app.app_context():
             for i in range(simulation_count):
                 print(f"\n开始第 {i+1}/{simulation_count} 次模拟")
                 
@@ -220,8 +226,10 @@ def handle_start_game(data):
                     human_player_id="P5" if include_human else None,
                     player_models=player_models,
                     random_team=random_team,
-                    player_teams=player_teams
+                    player_teams=player_teams,
+                    lang=lang  # 确保传递语言设置
                 )
+                game_manager.output.set_language(lang)
                 
                 game_manager.run_game(
                     test_mode=False,
@@ -417,43 +425,14 @@ def create_game():
         human_player_id="P5" if include_human else None
     )
 
-@app.route('/set_language', methods=['POST'])
-def set_language():
-    lang = request.json.get('lang')
-    print(f"Language change request received: {lang}")
-    if lang in ['en', 'zh']:
-        session['lang'] = lang
-        if game_manager:
-            game_manager.set_language(lang)
-            if game_manager.game:
-                game_manager.game.lang = lang
-                print(f"Game language set to: {lang}")  # 调试日志
-        return jsonify({'status': 'success'})
-    return jsonify({'status': 'error', 'message': 'Unsupported language'})
-
-@app.route('/set_game_language', methods=['POST'])
-def set_game_language():
-    game_lang = request.json.get('language', 'zh')
+@socketio.on('switch_language')
+def handle_language_switch(data):
+    lang = data.get('lang', 'zh')
+    print(f"Language switch requested: {lang}")
+    game_manager.output.set_language(lang)
     if game_manager.game:
-        for player in game_manager.game.players:
-            player.game_lang = game_lang
-    return jsonify({'status': 'success'})
-
-# 添加规则文件的路径配置
-RULES_PATH = os.path.dirname(os.path.abspath(__file__))
-
-@app.route('/rules/<lang>')
-def get_rules(lang):
-    try:
-        filename = 'game_rules.md' if lang == 'zh' else 'game_rules_en.md'
-        file_path = os.path.join(RULES_PATH, filename)
-        print(f"Attempting to read rules file: {file_path}")  # 调试信息
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
-        return jsonify({'content': content})
-    except Exception as e:
-        print(f"Error loading rules file: {str(e)}")  # 调试信息
-        return jsonify({'error': str(e)}), 404
+        game_manager.game.lang = lang
+        print(f"Game language updated: {game_manager.game.lang}")
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)

@@ -140,6 +140,12 @@
         document.addEventListener('DOMContentLoaded', () => {
             updateUIText();
             initializeSocket();  // 初始化 socket 连接
+            // 初始化语言设置
+            const gameLangSelect = document.getElementById('game-language');
+            if (gameLangSelect) {
+                gameLangSelect.value = currentLang;  // 设置下拉框的初始值
+                switchLanguage(currentLang);  // 确保应用当前语言设置
+            }
         });
 
         async function loadRules() {
@@ -176,10 +182,6 @@
 </head>
 <body>
     <div class="container">
-        <div class="language-selector">
-            <button onclick="setLanguage('zh')" class="lang-btn" id="zh-btn">中文</button>
-            <button onclick="setLanguage('en')" class="lang-btn" id="en-btn">English</button>
-        </div>
         <h1 data-i18n="game_title"></h1>
         <div class="user-stats">
             <h3 data-i18n="welcome" data-i18n-params='{"username": "{{ user.username }}"}'></h3>
@@ -267,15 +269,8 @@
         </div>
         <div class="settings-panel">
             <div class="setting-item">
-                <label for="display-language">显示语言/Display Language:</label>
-                <select id="display-language" onchange="changeDisplayLanguage(this.value)">
-                    <option value="zh">中文</option>
-                    <option value="en">English</option>
-                </select>
-            </div>
-            <div class="setting-item">
                 <label for="game-language">游戏语言/Game Language:</label>
-                <select id="game-language" onchange="changeGameLanguage(this.value)">
+                <select id="game-language" onchange="switchLanguage(this.value)">
                     <option value="zh">中文</option>
                     <option value="en">English</option>
                 </select>
@@ -324,7 +319,8 @@
                 player_models: playerModels,
                 random_team: randomTeam,
                 player_teams: playerTeams,
-                simulation_count: simulationCount
+                simulation_count: simulationCount,
+                lang: currentLang  // 添加语言参数
             });
             
             socket.emit('start_game', {
@@ -332,7 +328,8 @@
                 player_models: playerModels,
                 random_team: randomTeam,
                 player_teams: playerTeams,
-                simulation_count: simulationCount
+                simulation_count: simulationCount,
+                lang: currentLang  // 添加语言参数
             });
         } catch (error) {
             console.error('Error starting game:', error);
