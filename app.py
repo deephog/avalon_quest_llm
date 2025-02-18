@@ -431,6 +431,14 @@ def set_language():
         return jsonify({'status': 'success'})
     return jsonify({'status': 'error', 'message': 'Unsupported language'})
 
+@app.route('/set_game_language', methods=['POST'])
+def set_game_language():
+    game_lang = request.json.get('language', 'zh')
+    if game_manager.game:
+        for player in game_manager.game.players:
+            player.game_lang = game_lang
+    return jsonify({'status': 'success'})
+
 # 添加规则文件的路径配置
 RULES_PATH = os.path.dirname(os.path.abspath(__file__))
 

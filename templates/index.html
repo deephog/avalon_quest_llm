@@ -265,6 +265,22 @@
                 </label>
             </div>
         </div>
+        <div class="settings-panel">
+            <div class="setting-item">
+                <label for="display-language">显示语言/Display Language:</label>
+                <select id="display-language" onchange="changeDisplayLanguage(this.value)">
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+            <div class="setting-item">
+                <label for="game-language">游戏语言/Game Language:</label>
+                <select id="game-language" onchange="changeGameLanguage(this.value)">
+                    <option value="zh">中文</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>

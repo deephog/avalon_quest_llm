@@ -51,7 +51,7 @@ class OllamaAdapter:
 class Player:
     def __init__(self, player_id: str, team_mates: List[str] = None, 
                  is_human: bool = False, output: Optional[GameOutput] = None,
-                 model_api: str = None):
+                 model_api: str = None, game_lang: str = 'zh'):
         """
         初始化玩家
         Args:
@@ -67,6 +67,7 @@ class Player:
         self.character = random.choice(CHARACTER)
         self.strategy = random.choice(STRATEGY)
         self.model_api = model_api or get_model_api()  # 使用指定的模型或默认模型
+        self.game_lang = game_lang  # 游戏语言，影响 LLM 提示语
         self.llm = self._initialize_llm()
         
         # 记忆系统
@@ -190,7 +191,7 @@ class Player:
         """生成本轮总结并存入记忆"""
         game_history = game_state['game_history']
         is_leader = game_state['leader_id'] == self.id
-        required_team_size = team_size  # 获取本轮需要的队员数量
+        required_team_size = team_size
         leader_info = ""
         leader_task = ""
 
@@ -242,81 +243,165 @@ class Player:
                 return False
 
         if is_leader:
-            leader_info = f"""
-                队长附加任务：作为本轮队长，你需要额外完成以下任务：
-                1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
-                  - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
-                  - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: Px Py"
+            if self.game_lang == 'en':
+                leader_info = f"""
+                    Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks:
+                    1. After the "Please output in the following format" prompt, start with "TeamSelection:" to list the players you want to include in this mission (excluding yourself).
+                       - You must select exactly {required_team_size-1} other players, no more no less (as you will automatically join the team)
+                       - Format example: If you need to select 2 players, input "TeamSelection: Px Py"
 
-                2. 在"请按以下格式输出的"提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
-                  - 目标必须是你选择的队员之一或你自己
-                  - 示例格式："MagicTarget: Px"
+                    2. After the "Please output in the following format" prompt, start with "MagicTarget:" to specify a target for the magic token
+                       - The target must be one of your selected team members or yourself
+                       - Format example: "MagicTarget: Px"
+                    """
                 
-                请记住：
-                - 你的选择应该基于你的分析和策略
-                - 如果你是蓝方，应该选择你认为可信的玩家，并且要尽可能与你发言中说自己要带的人一致，否则会降低你的信任度
-                - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
+                leader_task = """
+                    TeamSelection:
+                    [List exactly {required_team_size-1} other player IDs here, space-separated, e.g., P1 P5]
+                    
+                    MagicTarget:
+                    [Specify one player ID from your team selection or your own ID]
+                    """
+            else:
+                leader_info = f"""
+                    队长附加任务：作为本轮队长，你需要额外完成以下任务：
+                    1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
+                      - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
+                      - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: Px Py"
+
+                    2. 在"请按以下格式输出的"提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
+                      - 目标必须是你选择的队员之一或你自己
+                      - 示例格式："MagicTarget: Px"
+                    
+                    请记住：
+                    - 你的选择应该基于你的分析和策略
+                    - 如果你是蓝方，应该选择你认为可信的玩家，并且要尽可能与你发言中说自己要带的人一致，否则会降低你的信任度
+                    - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
+                    """
+                
+                leader_task = """
+                    TeamSelection:
+                    [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5]
+                    
+                    MagicTarget:
+                    [在这里从队伍成员（包括你自己）中选择1名作为魔法目标, 用ID（如P1）表示]
                 """
-            
-            leader_task = """
-                TeamSelection:
-                [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5]
-                
-                MagicTarget:
-                [在这里从队伍成员（包括你自己）中选择1名作为魔法目标, 用ID（如P1）表示]
-            """
 
         if self.role == 'red':
-            prompt_info = f"""
-                你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
+            if self.game_lang == 'en':
+                prompt_info = f"""
+                    You are playing the Quest board game. Your ID is {self.id}, you are on the {self.role} team. Current round: {game_state['round']+1}. Game history:
+                    
+                    {game_history}
+
+                    Your ID: {self.id}
+
+                    Your teammates' IDs: {','.join(self.team_mates)}
+
+                    Current round leader ID: {game_state['leader_id']}
+
+                    All players: P1 P2 P3 P4 P5
+                    
+                    Recent information and chat history:
+                    {self._get_current_memory()}
+
+                    Personal analysis history review:
+                    {self._get_summary_history()}
+
+                    Game rules review:
+                    {self.rules_text}
+
+                    Your playing strategy style: {self.strategy}
+
+                    Please complete the following tasks:
+
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    
+                    1. As a red team player, please analyze the following content and output your analysis starting with "Summary:":
+                    - Evaluate the current game situation, team formations, and your team's trust level in other players' eyes
+                    - Consider whether to hide your identity to build trust or create confusion to reduce blue team players' trust
+                    - Plan your strategy for the upcoming rounds
+                    Please note these rules when analyzing:
+                    - Morgana can ignore magic token restrictions and can still play fail cards even when targeted by magic
+                    - A regular red player must play success cards when targeted by magic
+                    - Players who have been leader cannot be chosen as leader again
+
+                    2. Generate your next speech:
+                    Start with "NextSpeech:" and give a 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches
+                    """
                 
-                {game_history}
+                prompt_task = f"""
+                    Please output in the following format:
+                    Summary:
+                    [Output your situation analysis here, within 500 words]
 
-                你自己的ID：{self.id}
+                    NextSpeech:
+                    [Output your next round speech here, 100-200 words. Base it on your analysis and match your strategy style {self.strategy} and character trait {self.character}]
+                    """
+            else:
+                prompt_info = f"""
+                        你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
+                        
+                        {game_history}
 
-                你队友的ID：{','.join(self.team_mates)}
+                        你自己的ID：{self.id}
 
-                当前轮队长ID：{game_state['leader_id']}
+                        你队友的ID：{','.join(self.team_mates)}
 
-                场上所有玩家：P1 P2 P3 P4 P5
+                        当前轮队长ID：{game_state['leader_id']}
+
+                        场上所有玩家：P1 P2 P3 P4 P5
+
+                        最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
+                        {self._get_current_memory()}
+
+                        个人历史分析回顾：
+                        {self._get_summary_history()}
+
+                        游戏规则回顾：
+                        {self.rules_text}
+
+                        你的游玩策略风格: {self.strategy}
+
+                        请完成以下任务：
+
+                        提醒：请限制你思考的深度，不要超过5层，不要超过500字。
+                        
+                        一、 分析并总结当前局势：
+                        如果你是蓝方玩家，请综合分析以下内容，并以"Summary："开头输出你的分析：
+                        1. 根据所有以往任务表现、组队选择、队长转移、魔法指示物使用等去推理可疑玩家。
+                        2. 判断摩根勒菲是否被使用魔法，摩根勒菲可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                        3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
+                        4. 要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。
+                        5. 你当前的怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个。
+                        6. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，并带你做任务。
+                        7. 对后续游戏的策略计划。
+                        
+                        二、 更新对其他玩家的身份猜测，并以"Guess："开头输出你的猜测：
+                        从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
+                        然后，针对剩下的玩家，判断他们是蓝方还是不能确定。
+                        如果当前是第一轮，信息不足的情况下，你可以不认为任何玩家是红方。
+                        
+                        三、 生成下一轮发言：
+                        用"NextSpeech:"开头给出一段100-200个字的发言，相信和怀疑的目标尽可能与你的怀疑清单一致。
+                        如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
+                        发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
+                        """
                 
-                最近信息与对话记录：
-                {self._get_current_memory()}
+                prompt_task = f"""
+                        请按以下格式输出：
+                        Summary:
+                        [在这里输出500字以内的局势和策略分析]
+                        
+                        Guess:
+                        // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
+                        {{"P1": "blue", "P2": "red", "P3": "unknown"}}
 
-                个人历史分析回顾：
-                {self._get_summary_history()}
-
-                游戏规则回顾：
-                {self.rules_text}
-
-                你的游玩策略风格: {self.strategy}
-
-                请完成以下任务：
-
-                提醒：请限制你思考的深度，不要超过5层，不要超过500字。
-                
-                一、你是红方玩家，请综合分析以下内容并以"Summary："开头输出你的分析：
-                - 评估场上的胜负局势，组队情况，你跟你队友目前在其它玩家眼中的信任度，来思考该执行什么样的策略，是隐藏自己增加信任度，还是混淆视听，降低其它蓝队玩家的信任度。
-                - 对后续游戏的策略计划。
-                分析时请注意以下一些规则：
-                - 摩根勒菲可以无视魔法指示物的限制，即使被使用魔法，也依然可以正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                - 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
-
-                二、 生成下一轮发言：
-                用"NextSpeech:"开头给出一段100-200个字的发言，可以根据策略自由发挥，混淆视听，千万不要暴露自己和队友的身份，甚至可以声称自己是另一方来迷惑对方。
-                发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-                """
+                        NextSpeech:
+                        [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
+                        """
             
-            prompt_task = f"""
-                请按以下格式输出：
-                Summary:
-                [在这里输出500字以内的局势和策略分析]
-
-                NextSpeech:
-                [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，符合你的策略风格{self.strategy}和性格特点{self.character}]
-                """
-
-
             if is_leader:
                 prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
             else:
@@ -581,6 +666,7 @@ class AvalonSimulator:
         self.player_models = player_models or {}
         self.random_team = random_team
         self.player_teams = player_teams or {}
+        self.lang = getattr(output, 'lang', 'zh')  # 获取输出语言，默认中文
         
         print(f"Initializing game in {'test' if test_mode else 'normal'} mode")
         print(f"Human player ID: {self.human_player_id}")
@@ -631,8 +717,6 @@ class AvalonSimulator:
         self.game_history = []
         self.game_history_header = "| 轮次 | 队长 | 任务队员 | 魔法目标 | 任务结果 | 失败票数 |\n|------|------|----------|-----------|----------|----------|"
 
-        self.lang = getattr(output, 'lang', 'zh')  # 获取输出语言，默认中文
-
     def _initialize_players(self, human_player_id: str):
         """初始化玩家列表"""
         players = []
@@ -640,7 +724,7 @@ class AvalonSimulator:
         for i in range(1, 6):
             player_id = f"P{i}"
             is_human = (player_id == human_player_id)
-            player = Player(player_id, is_human=is_human, output=self.output, model_api=self.player_models.get(f"P{i}"))
+            player = Player(player_id, is_human=is_human, output=self.output, model_api=self.player_models.get(f"P{i}"), game_lang=self.lang)
             players.append(player)
         
         return players
