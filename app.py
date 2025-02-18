@@ -425,5 +425,21 @@ def set_language():
         return jsonify({'status': 'success'})
     return jsonify({'status': 'error', 'message': 'Unsupported language'})
 
+# 添加规则文件的路径配置
+RULES_PATH = os.path.dirname(os.path.abspath(__file__))
+
+@app.route('/rules/<lang>')
+def get_rules(lang):
+    try:
+        filename = 'game_rules.md' if lang == 'zh' else 'game_rules_en.md'
+        file_path = os.path.join(RULES_PATH, filename)
+        print(f"Attempting to read rules file: {file_path}")  # 调试信息
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        return jsonify({'content': content})
+    except Exception as e:
+        print(f"Error loading rules file: {str(e)}")  # 调试信息
+        return jsonify({'error': str(e)}), 404
+
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000, allow_unsafe_werkzeug=True)

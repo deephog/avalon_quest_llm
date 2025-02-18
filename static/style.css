@@ -187,8 +187,10 @@ button {
     border: 1px solid #888;
     width: 80%;
     max-width: 600px;
+    max-height: 70vh;  /* 设置最大高度为视窗高度的70% */
     border-radius: 5px;
     position: relative;
+    overflow-y: auto;  /* 添加垂直滚动条 */
 }
 
 .close-button {
@@ -207,6 +209,7 @@ button {
     color: #333;
     line-height: 1.6;
     margin-top: 20px;
+    padding-right: 10px;  /* 为滚动条留出空间 */
 }
 
 .test-button {
@@ -392,4 +395,23 @@ button {
     background-color: #222;
     color: #666;
     cursor: not-allowed;
+}
+
+/* 自定义滚动条样式 */
+.rules-modal-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.rules-modal-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.rules-modal-content::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.rules-modal-content::-webkit-scrollbar-thumb:hover {
+    background: #555;
 }
