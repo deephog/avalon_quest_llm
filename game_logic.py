@@ -22,6 +22,8 @@ from flask_migrate import Migrate
 #from app import db  # 导入数据库实例
 from config import Config
 from game_messages import GAME_MESSAGES
+from prompt_system import PromptSystem
+from response_validator import ResponseValidator
 
 os.environ["OPENAI_API_KEY"] = "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"
 CHARACTER = ['沉稳']#['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
@@ -257,38 +259,41 @@ class Player:
         if is_leader:
             if self.game_lang == 'en':
                 leader_info = f"""
-                    Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks, you must strictly follow the format in completing these tasks:
-                    1. Start with "TeamSelection:", list players other than yourself, you want to include in this mission (you will be automatically added to the team later).
+                    Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks, and output a JSON block in the [LEADER_TASK] section:
+                    1. In the "team_selection" field, list the players other than yourself that you want to include in this mission (you will be automatically added to the team later).
                        - You must select exactly {required_team_size-1} players from {', '.join(other_players)}
-                       - Format example: If you need to select 2 players, you may output in the following format: "TeamSelection: P3 P5"
 
-                    2. Start with "MagicTarget:" to specify a target for the magic token
-                       - The target must be one of your selected team members in TeamSelection or yourself {self.id}
-                       - Format example: "MagicTarget: P1"
+                    2. In the "magic_target" field, specify a target player ID for the magic token
+                       - The target must be one of your "team_selection" members or yourself {self.id}
                     
                     Note:
                     - You choice must be based on your analysis and thinking.
                     - If you are Blue team, you should choose a player who you think is reliable (other blue team members), and be consistent with your speech as much as possible.
-                    - If you are Red team, you can consider a strategy to confuse the blue team, but you must strictly follow the format and number of choices.
+                    - If you are Red team, you can consider a strategy to confuse the blue team, but you must strictly follow the format requirements.
                     """
                 
-                leader_task = """
-                    TeamSelection:
-                    [List exactly {required_team_size-1} other player IDs here, space-separated, e.g., P1 P5 ]
-                    
-                    MagicTarget:
-                    [Specify one player ID from your TeamSelection or your own ID]
-                    """
+                leader_task = f"""
+                            👉 Leader Tasks：
+                            [LEADER_TASK]
+                            {{
+                            "team_selection": ["P3", "P5"], 
+                            "magic_target": "P3"  
+                            }}
+                            [/LEADER_TASK]
+
+                            🔹 Important Rules：
+                            1. Two JSON blocks must be separated
+                            2. Key names must use lowercase letters and underscores
+                            3. Player IDs must use the P+number format
+                            """
             else:
                 leader_info = f"""
-                    队长附加任务：作为本轮队长，你需要额外完成以下任务：
-                    1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
+                    队长附加任务：作为本轮队长，你需要额外完成以下任务，并按照格式要求输出在[LEADER_TASK]中：
+                    1. 在team_selection字段中列出你要选择加入此次任务的队员（不包括你自己）。
                       - 你必须选择恰好 {required_team_size-1} 名其他玩家 {', '.join(other_players)}，不能多也不能少（因为你自己会自动加入队伍）
-                      - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: P1 P5"， 用空格分隔
 
-                    2. 在"请按以下格式输出的"提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
-                      - 目标必须是你选择的队员之一或你自己 {self.id}
-                      - 示例格式："MagicTarget: P1"
+                    2. 在magic_target字段中指定一名魔法指示物目标玩家的ID
+                      - 目标必须是你选择的队员team_selection之一或你自己 {self.id}
                     
                     请记住：
                     - 你的选择应该基于你的分析和策略
@@ -296,13 +301,68 @@ class Player:
                     - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
                     """
                 
-                leader_task = """
-                    TeamSelection:
-                    [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5 ]
+                leader_task = f"""
                     
-                    MagicTarget:
-                    [在这里从队伍成员（包括你自己）中选择1名作为魔法目标, 用ID（如P1）表示]
-                """
+                    👉 队长专属任务：
+                    [LEADER_TASK]
+                    {{
+                    "team_selection": ["P3", "P5"], 
+                    "magic_target": "P3"      
+                    }}
+                    [/LEADER_TASK]
+
+                    🔹 重要规则：
+                    1. 两个JSON块必须分开
+                    2. 键名必须使用小写字母和下划线
+                    3. 玩家ID必须使用P加数字格式
+                    """
+
+
+        if self.game_lang == 'en':
+            prompt_task = f"""👉 Please output STRICTLY in this JSON format:
+                            [ANALYSIS_SPEECH]
+                            {{
+                            "summary": "Your analysis of the current situation... (max 500 words)",
+                            "guess": {{
+                                "P1": "red/blue/unknown",
+                                "P2": "red/blue/unknown",
+                                "P3": "red/blue/unknown",
+                                "P4": "red/blue/unknown",
+                                "P5": "red/blue/unknown"
+                            }},
+                            "next_speech": "Your 100-200 words speech for the next round..."
+                            }}
+                            [/ANALYSIS_SPEECH]
+                            🔹 Example:
+                            {{
+                            "summary": "Based on results of previous tasks and everyone's speech...",
+                            "guess": {{"P1": "blue", "P2": "unknown", "P3": "red", "P4": "blue", "P5": "unknown"}},
+                            "next_speech": "I noticed some inconsistencies in the last round's votes..."
+                            }}"""
+        else:
+            prompt_task = f"""👉 请严格使用以下JSON格式输出：
+                            [ANALYSIS_SPEECH]
+                            {{
+                            "summary": "当前局势分析...（最多500字）",
+                            "guess": {{
+                                "P1": "red/blue/unknown",
+                                "P2": "red/blue/unknown",
+                                "P3": "red/blue/unknown",
+                                "P4": "red/blue/unknown",
+                                "P5": "red/blue/unknown"
+                            }},
+                            "next_speech": "你的下一轮发言内容，100-200字..."
+                            }}
+
+                            🔹 示例：
+                            {{
+                            "summary": "根据目前任务完成情况和玩家们的表现...",
+                            "guess": {{"P1": "blue", "P2": "unknown", "P3": "red", "P4": "blue", "P5": "unknown"}},
+                            "next_speech": "我注意到上一轮投票中存在一些矛盾之处..."
+                            }}
+                            [/ANALYSIS_SPEECH]"""
+        
+
 
         if self.role == 'red':
             if self.game_lang == 'en':
@@ -328,34 +388,30 @@ class Player:
                     Game rules review:
                     {self.rules_text}
 
-                    Your playing strategy style: {self.strategy}
+                    Please complete the following tasks and output your analysis in a JSON block in the [ANALYSIS_SPEECH] section:
 
-                    Please complete the following tasks:
-
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words, put your analysis in the Summary section.
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
                     
-                    1. As a red team player, please analyze the following content and output your analysis starting with "Summary:":
-                    - Evaluate the current game situation, team formations, and your team's trust level in other blue players' views
+                    1. As a red team player, please analyze the following content and output your analysis in the "summary" field:
+                    - Evaluate your team's trust level in other blue players' views by analyzing the results of previous tasks and everyone's speech
                     - Consider whether to hide your identity to build trust or create confusion to reduce blue team players' trust
                     - Plan your strategy for the upcoming rounds
+                    
                     Please note these rules when analyzing:
                     - Morgan Le Fay can ignore magic token restrictions and can still play fail cards even when targeted by magic
                     - A regular red player must play success cards when targeted by magic
                     - Players who have been leader cannot be chosen as leader again
 
-                    2. Generate your next speech:
-                    Start with "NextSpeech:" and give a 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
+                    2. Update your guesses about other players' identities, output in the "guess" field:
+                    You are red team, you know exactly who is on which team. This is just a dummy task just to keep output format consistent. 
+                    you just put you and your teammates' IDs as red, and the rest as blue. 
+                    You can only guess one of red/blue/unknown for each player.
+                    3. Generate your next speech:
+                    Output in the  "next_speech" field and give your 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
                     Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
                     """
                 
-                prompt_task = f"""
-                    Please output in the following format:
-                    Summary:
-                    [Output your situation analysis here, within 500 words]
-
-                    NextSpeech:
-                    [Output your next round speech here, 100-200 words. Base it on your analysis and match your strategy style {self.strategy} and character trait {self.character}]
-                    """
+                
             else:
                 prompt_info = f"""
                         你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
@@ -379,50 +435,24 @@ class Player:
                         游戏规则回顾：
                         {self.rules_text}
 
-                        你的游玩策略风格: {self.strategy}
-
-                        请完成以下任务：
+                        请完成以下任务，并以JSON格式输出你的分析在[ANALYSIS_SPEECH]中：
 
                         提醒：请限制你思考的深度，不要超过5层，不要超过500字。
                         
-                        一、 分析并总结当前局势：
-                        如果你是蓝方玩家，请综合分析以下内容，并以"Summary："开头输出你的分析：
-                        1. 根据所有以往任务表现、组队选择、队长转移、魔法指示物使用等去推理可疑玩家。
-                        2. 判断摩根勒菲是否被使用魔法，摩根勒菲可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                        3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
-                        4. 要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。
-                        5. 你当前的怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个。
-                        6. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，并带你做任务。
-                        7. 对后续游戏的策略计划。
+                            
+                        一、 作为红方玩家，请基于以下结构分析当前局势，拟定策略，并将你的分析输出在"summary"字段里:
+                        - 基于之前任务完成情况和玩家们的发言，评估你的团队在其他蓝方玩家眼中的可信度
+                        - 考虑是否隐藏身份以建立信任或通过制造混乱来降低蓝方玩家的可信度
+                        - 制定接下来的策略
                         
-                        二、 更新对其他玩家的身份猜测，并以"Guess："开头输出你的猜测：
-                        从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
-                        然后，针对剩下的玩家，判断他们是蓝方还是不能确定。
-                        如果当前是第一轮，信息不足的情况下，你可以不认为任何玩家是红方。
-                        
-                        三、 生成下一轮发言：
-                        用"NextSpeech:"开头给出一段100-200个字的发言，相信和怀疑的目标尽可能与你的怀疑清单一致。
-                        如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
-                        发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-                        """
-                
-                prompt_task = f"""
-                        请按以下格式输出：
-                        Summary:
-                        [在这里输出500字以内的局势和策略分析]
-                        
-                        Guess:
-                        // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
-                        {{"P1": "blue", "P2": "red", "P3": "unknown"}}
+                        二、 更新对其他玩家的身份猜测，并在"guess"字段中以json格式输出你的猜测：
+                        由于你是红方玩家，你确切知道谁在哪个阵营，这是一个虚拟任务，只是为了保持输出格式一致。
+                        你只需要把自己和你的队友们的猜成red，其他玩家猜作blue。对每个玩家只能从red/blue/unknown中猜测一个身份。
 
-                        NextSpeech:
-                        [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
+                        三、 生成下一轮发言：
+                        在"nextspeech"字段中给出一段100-200个字的发言。你可以尽情发挥策略性和误导性，争取进入任务并将其破坏；但同时绝对不要透露你和队友的身份。
+                        发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。
                         """
-            
-            if is_leader:
-                prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
-            else:
-                prompt = "\n".join([prompt_info, prompt_task])
                 
         else:
             if self.game_lang == 'en':
@@ -446,45 +476,31 @@ class Player:
                     Game rules review:
                     {self.rules_text}
 
-                    Your playing strategy style: {self.strategy}
-
                     Please complete the following tasks:
 
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words, put your analysis in the Summary section.
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
                     
-                    1. Analyze and summarize the current situation:
-                    As a blue team player, please analyze the following content and output your analysis starting with "Summary:":
-                    1. Analyze suspicious players based on all past task performances, team selections, leader transfers, and magic token usage.
-                    2. Determine if Morgana has been targeted by magic - Morgana can ignore magic token restrictions and still play fail cards, while other red players must play success cards when targeted.
-                    3. Note that players who have been leader cannot be chosen as leader again when analyzing leader transfer history.
-                    4. Consider whether to trust other players' speeches or analyze them in reverse based on your identity guesses.
-                    5. List your current suspects and reasoning. Since there are only two red players, you should not have more than two main suspects.
-                    6. Try to convince other blue players that you are on the blue team and get them to include you in missions.
-                    7. Plan your strategy for upcoming rounds.
+                    1. As a blue team player, please analyze the following content and output your analysis in the "summary" field:
+                    - Try to identify each player's role and character (Morgan Le Fay) based on all past game history, conversation records.
+                    - Think about how to convince other blue players that you are on the blue team and get them to include you in missions.
+                    - Plan your strategy for upcoming rounds.
+
+                    Please note these rules when analyzing:
+                    - Morgan Le Fay can ignore magic token restrictions and can still play fail cards even when targeted by magic
+                    - A regular red player must play success cards when targeted by magic
+                    - Players who have been leader cannot be chosen as leader again
                     
-                    2. Update your guesses about other players' identities, starting with "Guess:":
+                    2. Update your guesses about other players' identities, output in the "guess" field:
                     Guess 0-2 players most likely to be red from all players except yourself.
-                    Then determine if the remaining players are blue or uncertain.
-                    If this is the first round with insufficient information, you may not suspect anyone of being red.
-                    
+                    Then determine if the remaining players are blue or uncertain. alway put yourself as blue.
+                    You can only guess one of red/blue/unknown for each player.
                     3. Generate your next speech:
-                    Start with "NextSpeech:" and give a 100-200 word speech. Your trust and suspicions should align with your guess list.
+                    Output in the "next_speech" field and give your 100-200 word speech. If you talk about your trust and suspicions, they'd better align with your guess list.
                     If this is the first round with insufficient information, you may not express trust or suspicion of anyone.
                     Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
                     """
 
-                prompt_task = f"""
-                    Please output in the following format:
-                    Summary:
-                    [Output your situation analysis here, within 500 words]
-                    
-                    Guess:
-                    // Your guesses for all players except yourself, values can only be "red", "blue" or "unknown", example:
-                    {{"P1": "blue", "P2": "red", "P3": "unknown"}}
-
-                    NextSpeech:
-                    [Output your next round speech here, 100-200 words. Base it on your analysis, your identity guesses, and match your strategy style {self.strategy} and character trait {self.character}]
-                    """
+                
             else:
                 prompt_info = f"""
                     你正在玩Quest桌游，你的ID是{self.id}, 身份是{self.role}阵营玩家。当前游戏进行到了第{game_state['round']+1}轮，历史局势：
@@ -512,44 +528,30 @@ class Player:
 
                     提醒：请限制你思考的深度，不要超过5层，不要超过500字。
                     
-                    一、 分析并总结当前局势：
-                    如果你是蓝方玩家，请综合分析以下内容，并以"Summary："开头输出你的分析：
-                    1. 根据所有以往任务表现、组队选择、队长转移、魔法指示物使用等去推理可疑玩家。
-                    2. 判断摩根勒菲是否被使用魔法，摩根勒菲可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
-                    3. 已经当过队长的人，不可以再重复被选为队长，在分析历史队长转移信息，请注意这一点。
-                    4. 要结合对其它玩家的身份推测，来判断是否相信他们的发言，还是对他们的发言进行反向推理。
-                    5. 你当前的怀疑对象及其依据。由于场上只有两个红方，所以你的核心怀疑对象不应超过两个。
-                    6. 你要尽可能尝试说服其它的蓝方玩家，让他们相信你是蓝方玩家，并带你做任务。
-                    7. 对后续游戏的策略计划。
-                    
-                    二、 更新对其他玩家的身份猜测，并以"Guess："开头输出你的猜测：
-                    从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
-                    然后，针对剩下的玩家，判断他们是蓝方还是不能确定。
-                    如果当前是第一轮，信息不足的情况下，你可以不认为任何玩家是红方。
-                    
-                    三、 生成下一轮发言：
-                    用"NextSpeech:"开头给出一段100-200个字的发言，相信和怀疑的目标尽可能与你的怀疑清单一致。
-                    如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的相信和怀疑。
-                    发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话
-                    """
-            
-                prompt_task = f"""
-                        请按以下格式输出：
-                        Summary:
-                        [在这里输出500字以内的局势和策略分析]
-                        
-                        Guess:
-                        // 对除自己外的所有玩家的猜测，值只能是"red"、"blue"或"unknown"， 示例：
-                        {{"P1": "blue", "P2": "red", "P3": "unknown"}}
+                    一、你是蓝方玩家，请综合分析以下内容，在"summary"字段中输出你对局势的分析和策略：
+                    - 根据game_history和conversation_history，推理每个玩家的红蓝身份，尤其是Morgan Le Fay的身份。
+                    - 思考如何说服其他蓝方玩家相信你是蓝方，并让他们包括你一起做任务。
+                    - 制定接下来的策略。
 
-                        NextSpeech:
-                        [在这里输出下一轮你的发言内容，字数100-200字。发言要基于你的分析，你的身份猜测，符合你的策略风格{self.strategy}和性格特点{self.character}]
-                        """
+                    请注意以下规则：
+                    - Morgan Le Fay可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                    - 已经当过队长的人，不可以再重复被选为队长。
+
+                    二、 更新对其他玩家的身份猜测，并在"guess"字段中以json格式输出你的猜测：
+                    从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
+                    然后，针对剩下的玩家，判断他们是蓝方还是unknown。永远把自己猜作蓝方。
+                    对于每个玩家，你只能从red/blue/unknown中猜测一个身份。
+
+                    三、 生成下一轮发言：
+                    在"next_speech"字段中给出一段100-200个字的发言。如果谈论到你信任和怀疑的玩家，他们应该尽可能与你的guess清单一致。
+                    如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的信任和怀疑。
+                    发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。
+                    """     
             
-            if is_leader:
-                prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
-            else:
-                prompt = "\n".join([prompt_info, prompt_task])
+        if is_leader:
+            prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
+        else:
+            prompt = "\n".join([prompt_info, prompt_task])
 
         # 生成响应，如果是队长且响应不符合要求则重试
   
@@ -575,66 +577,27 @@ class Player:
 
         # 解析响应
         try:
-            # 清理和标准化响应文本
-            response = response.strip()
-
-            if "Summary:" not in response:
-                print(f"Invalid response format: {response}")
-                return response
-
-            # 提取总结部分
-            parts = response.split("Summary:")[1]
-            summary_part = parts.split("Guess:" if "Guess:" in parts else "NextSpeech:")[0].strip()
+            # 提取第一个完整的JSON对象
+            json_str = re.search(r'\{.*\}', response, re.DOTALL).group()
+            result = json.loads(json_str)
             
-            # 提取下一轮发言
-            if "NextSpeech:" in response:
-                next_speech = response.split("NextSpeech:")[1]
-
-                if 'TeamSelection:' in next_speech:
-                    next_speech = next_speech.split("TeamSelection:")[0].strip()
-                    self.next_speech = next_speech
-                else:
-                    self.next_speech = next_speech.strip()
-
-            if self.role == 'blue':
-                # 只有蓝方需要猜测
-                guess_part = response.split("Guess:")[1].split("NextSpeech:")[0].strip()
-                
-                # 清理 JSON 字符串
-                guess_part = guess_part.replace("'", '"')
-                # 移除注释行
-                guess_part = '\n'.join(line for line in guess_part.split('\n') if not line.strip().startswith('//'))
-                # 移除 markdown 格式
-                guess_part = re.sub(r'```json\s*|\s*```', '', guess_part)
-                # 确保是有效的 JSON 字符串
-                if not guess_part.startswith('{'):
-                    print(f"Invalid JSON format: {guess_part}")
-                    return response
-                
-                guess_json = json.loads(guess_part)
-                
-                # 更新猜测表
-                red_count = sum(1 for p in guess_json if guess_json[p] == "red")
-                if red_count > 2:
-                    red_players = [p for p in guess_json if guess_json[p] == "red"][:2]
-                    for p in guess_json:
-                        if p not in red_players and guess_json[p] == "red":
-                            guess_json[p] = "unknown"
-                
-                # 更新 self.guess
-                for p in self.guess:
-                    if p in guess_json and guess_json[p] in ["red", "blue", "unknown"]:
-                        self.guess[p] = guess_json[p]
+            # 验证基本结构
+            if not ResponseValidator.validate(result, 'leader' if self.is_leader else 'common'):
+                raise ValueError("响应格式不符合要求")
             
-            self.summary_memory = summary_part
-
-            return response
+            # 处理公共字段
+            self.summary = result.get('summary', '')
+            self.next_speech = result.get('speech', '')
             
+            # 处理队长专属字段
+            if self.is_leader:
+                self.selected_team = result.get('team_selection', [])
+                self.magic_target = result.get('magic_target', '')
+            
+            return result
         except Exception as e:
-            print(f"解析LLM响应失败：{e}\n响应内容：{response}")
-            self.summary_memory = response
-            return response
-
+            print(f"解析响应失败: {str(e)}")
+            return {}
 
     def propose_team(self, required_size, llm):
         """生成队伍提议，根据身份猜测表选择队友"""
