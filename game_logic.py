@@ -98,6 +98,7 @@ class Player:
                     model_name="accounts/fireworks/models/deepseek-r1",
                     max_tokens=40960,
                     fireworks_api_key=Config.FIREWORKS_API_KEY,
+                    temperature=0.3,
                 )
             elif self.model_api == 'gemini':
                 return ChatOpenAI(
@@ -119,7 +120,9 @@ class Player:
                 return ChatOpenAI(
                     model="deepseek-ai/DeepSeek-R1",
                     api_key="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ5dng1MjExQHBzdS5lZHUiLCJpYXQiOjE3Mzk1OTkwNTR9.2CCkv7SpWhcAK6pOvkb2rXK9uPYum4FUFUKunES16yM",
-                    base_url="https://api.hyperbolic.xyz/v1"
+                    base_url="https://api.hyperbolic.xyz/v1",
+                    max_tokens=20480,
+                    temperature=0.5,
                 )
             elif self.model_api == 'doubao-lite':
                 return ChatOpenAI(
@@ -130,16 +133,14 @@ class Player:
             elif self.model_api == 'siliconflow':
                 llm = ChatOpenAI(
                     model="Pro/deepseek-ai/DeepSeek-R1",
-                    max_tokens=40960,
+                    max_tokens=20480,
                     api_key="sk-ailkxszopmpfvssuabvqsqccuhsigqfqmrybfjztezsmbhjh",
                     base_url="https://api.siliconflow.cn/v1",
                 )
                 # 测试 API 连接
-                test_response = llm([HumanMessage(content="Test connection")])
-                print(f"Siliconflow API 初始化成功: {test_response}")
                 return llm
             else:
-                return ChatOpenAI(model='o1-mini')
+                return ChatOpenAI(model='o3-mini', reasoning_effort="high")
         except Exception as e:
             print(f"LLM 初始化失败 ({self.model_api}): {str(e)}")
             print("使用备用模型 o1-mini")
@@ -194,6 +195,7 @@ class Player:
         required_team_size = team_size
         leader_info = ""
         leader_task = ""
+        other_players = [f"P{i}" for i in range(1, 6) if f"P{i}" != self.id]
 
         def validate_leader_response(response: str) -> bool:
             if not ("TeamSelection:" in response and "MagicTarget:" in response):
@@ -203,6 +205,14 @@ class Player:
                 # 验证队伍大小
                 team_part = response.split("TeamSelection:")[1].split("MagicTarget:")[0].strip()
                 team_members = [p.strip() for p in team_part.split() if p.strip()]
+
+                for i in range(len(team_members)):
+                    team_members[i] = clean_player_id(team_members[i])
+                
+                team_members = [p for p in team_members if p is not None][:required_team_size-1]
+
+                print(f"队长选择的队伍: {team_members}")
+
                 if len(team_members) != required_team_size - 1:
                     print(f"队长选择的队伍大小不正确: 需要 {required_team_size-1} 人，实际选择了 {len(team_members)} 人")
                     return False
@@ -219,6 +229,7 @@ class Player:
                 
                 # 验证魔法目标
                 magic_part = response.split("MagicTarget:")[1].strip().split()[0]
+                magic_part = clean_player_id(magic_part)
                 if not magic_part:
                     print("队长没有选择魔法目标")
                     return False
@@ -230,11 +241,12 @@ class Player:
                     return False
                 
                 # 验证通过后，直接设置 selected_team
+                
                 self.selected_team = valid_targets
                 print(f"解析的队员: {team_part}")
                 print(f"最终队伍: {self.selected_team}")
 
-                self.magic_target = magic_part
+                self.magic_target = clean_player_id(magic_part)
                 print(f"队长 {self.id} 选择的魔法目标: {self.magic_target}")
                 
                 return True
@@ -245,33 +257,38 @@ class Player:
         if is_leader:
             if self.game_lang == 'en':
                 leader_info = f"""
-                    Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks:
-                    1. After the "Please output in the following format" prompt, start with "TeamSelection:" to list the players you want to include in this mission (excluding yourself).
-                       - You must select exactly {required_team_size-1} other players, no more no less (as you will automatically join the team)
-                       - Format example: If you need to select 2 players, input "TeamSelection: Px Py"
+                    Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks, you must strictly follow the format in completing these tasks:
+                    1. Start with "TeamSelection:", list players other than yourself, you want to include in this mission (you will be automatically added to the team later).
+                       - You must select exactly {required_team_size-1} players from {', '.join(other_players)}
+                       - Format example: If you need to select 2 players, you may output in the following format: "TeamSelection: P3 P5"
 
-                    2. After the "Please output in the following format" prompt, start with "MagicTarget:" to specify a target for the magic token
-                       - The target must be one of your selected team members or yourself
-                       - Format example: "MagicTarget: Px"
+                    2. Start with "MagicTarget:" to specify a target for the magic token
+                       - The target must be one of your selected team members in TeamSelection or yourself {self.id}
+                       - Format example: "MagicTarget: P1"
+                    
+                    Note:
+                    - You choice must be based on your analysis and thinking.
+                    - If you are Blue team, you should choose a player who you think is reliable (other blue team members), and be consistent with your speech as much as possible.
+                    - If you are Red team, you can consider a strategy to confuse the blue team, but you must strictly follow the format and number of choices.
                     """
                 
                 leader_task = """
                     TeamSelection:
-                    [List exactly {required_team_size-1} other player IDs here, space-separated, e.g., P1 P5]
+                    [List exactly {required_team_size-1} other player IDs here, space-separated, e.g., P1 P5 ]
                     
                     MagicTarget:
-                    [Specify one player ID from your team selection or your own ID]
+                    [Specify one player ID from your TeamSelection or your own ID]
                     """
             else:
                 leader_info = f"""
                     队长附加任务：作为本轮队长，你需要额外完成以下任务：
                     1. 在"请按以下格式输出的"提示之后，以"TeamSelection:"开头列出你要选择加入此次任务的队员（不包括你自己）。
-                      - 你必须选择恰好 {required_team_size-1} 名其他玩家，不能多也不能少（因为你自己会自动加入队伍）
-                      - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: Px Py"
+                      - 你必须选择恰好 {required_team_size-1} 名其他玩家 {', '.join(other_players)}，不能多也不能少（因为你自己会自动加入队伍）
+                      - 示例格式：如果需要选择2名队员，可输入 "TeamSelection: P1 P5"， 用空格分隔
 
                     2. 在"请按以下格式输出的"提示之后，以"MagicTarget:"开头指定一名魔法指示物目标
-                      - 目标必须是你选择的队员之一或你自己
-                      - 示例格式："MagicTarget: Px"
+                      - 目标必须是你选择的队员之一或你自己 {self.id}
+                      - 示例格式："MagicTarget: P1"
                     
                     请记住：
                     - 你的选择应该基于你的分析和策略
@@ -281,7 +298,7 @@ class Player:
                 
                 leader_task = """
                     TeamSelection:
-                    [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5]
+                    [在这里列出恰好 {required_team_size-1} 名其他玩家的ID，用空格分隔， 如 P1 P5 ]
                     
                     MagicTarget:
                     [在这里从队伍成员（包括你自己）中选择1名作为魔法目标, 用ID（如P1）表示]
@@ -315,20 +332,20 @@ class Player:
 
                     Please complete the following tasks:
 
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words, put your analysis in the Summary section.
                     
                     1. As a red team player, please analyze the following content and output your analysis starting with "Summary:":
-                    - Evaluate the current game situation, team formations, and your team's trust level in other players' eyes
+                    - Evaluate the current game situation, team formations, and your team's trust level in other blue players' views
                     - Consider whether to hide your identity to build trust or create confusion to reduce blue team players' trust
                     - Plan your strategy for the upcoming rounds
                     Please note these rules when analyzing:
-                    - Morgana can ignore magic token restrictions and can still play fail cards even when targeted by magic
+                    - Morgan Le Fay can ignore magic token restrictions and can still play fail cards even when targeted by magic
                     - A regular red player must play success cards when targeted by magic
                     - Players who have been leader cannot be chosen as leader again
 
                     2. Generate your next speech:
                     Start with "NextSpeech:" and give a 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
-                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
                     """
                 
                 prompt_task = f"""
@@ -433,7 +450,7 @@ class Player:
 
                     Please complete the following tasks:
 
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words, put your analysis in the Summary section.
                     
                     1. Analyze and summarize the current situation:
                     As a blue team player, please analyze the following content and output your analysis starting with "Summary:":
@@ -453,7 +470,7 @@ class Player:
                     3. Generate your next speech:
                     Start with "NextSpeech:" and give a 100-200 word speech. Your trust and suspicions should align with your guess list.
                     If this is the first round with insufficient information, you may not express trust or suspicion of anyone.
-                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches.
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
                     """
 
                 prompt_task = f"""
@@ -543,6 +560,8 @@ class Player:
                 response = llm([HumanMessage(content=prompt)]).get("content", "")
             else:
                 response = llm([HumanMessage(content=prompt)]).content
+
+            print(f"队长 {self.id} 的响应: {response}")
             
             if not is_leader or validate_leader_response(response):
                 break
@@ -1407,6 +1426,47 @@ def set_model_api(model: str):
 def get_model_api():
     """获取当前模型 API"""
     return _model_api
+
+def clean_player_id(player_id: str) -> Optional[str]:
+    """清理玩家ID前后的特殊符号，如果不是有效的玩家ID则返回None
+    例如: 
+    - 'P1.' -> 'P1'
+    - ' P2,' -> 'P2'
+    - 'P3。' -> 'P3'
+    - 'llm' -> None
+    - 'player' -> None
+    """
+    match = re.match(r'^[^P\d]*P?(\d)[^0-9]*$', player_id.strip())
+    if match and 1 <= int(match.group(1)) <= 5:  # 确保数字在1-5范围内
+        return f"P{match.group(1)}"
+    return None
+
+def parse_team_selection(self, response: str) -> List[str]:
+    """解析队伍选择响应"""
+    try:
+        team_match = re.search(r'TeamSelection:\s*(.*?)(?:\n|$)', response)
+        if not team_match:
+            return []
+        
+        # 分割、清理玩家ID并过滤掉无效ID
+        selected_players = [pid for pid in 
+            (clean_player_id(p) for p in team_match.group(1).split())
+            if pid is not None]
+        return selected_players
+    except Exception as e:
+        print(f"解析队伍选择失败: {str(e)}")
+        return []
+        
+def parse_magic_target(self, response: str) -> str:
+    """解析魔法指示物目标"""
+    try:
+        target_match = re.search(r'MagicTarget:\s*(.*?)(?:\n|$)', response)
+        if not target_match:
+            return ""
+        return clean_player_id(target_match.group(1))
+    except Exception as e:
+        print(f"解析魔法目标失败: {str(e)}")
+        return ""
 
 if __name__ == "__main__":
     terminal_output = TerminalOutput()
