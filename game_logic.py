@@ -24,6 +24,7 @@ from config import Config
 from game_messages import GAME_MESSAGES
 from prompt_system import PromptSystem
 from response_validator import ResponseValidator
+from langchain_anthropic import ChatAnthropic
 
 os.environ["OPENAI_API_KEY"] = "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"
 CHARACTER = ['沉稳']#['活泼', '激动', '沉稳', '粗鲁', '直白', '城府深', '卖弄', '单纯', '急躁']
@@ -91,6 +92,7 @@ class Player:
         self.next_speech = ""  # 存储下一轮的发言
         self.selected_team = []
         self.magic_target = ""
+        self.is_morgan = False
 
     def _initialize_llm(self):
         """初始化该玩家专属的语言模型"""
@@ -98,9 +100,9 @@ class Player:
             if self.model_api == 'fireworks':
                 return ChatFireworks(
                     model_name="accounts/fireworks/models/deepseek-r1",
-                    max_tokens=40960,
                     fireworks_api_key=Config.FIREWORKS_API_KEY,
-                    temperature=0.3,
+                    temperature=0.6,
+                    max_tokens=409600,
                 )
             elif self.model_api == 'gemini':
                 return ChatOpenAI(
@@ -141,8 +143,25 @@ class Player:
                 )
                 # 测试 API 连接
                 return llm
+            elif self.model_api == 'o3-mini-high':
+                return ChatOpenAI(
+                    model='o3-mini',
+                    reasoning_effort="high"
+                )
+            elif self.model_api == 'o3-mini-medium':
+                return ChatOpenAI(
+                    model='o3-mini',
+                    reasoning_effort="medium"
+                )
+            elif self.model_api == 'claude-3.5-haiku':
+                return ChatAnthropic(
+                    model_name="claude-3-5-sonnet-20240620",  # Haiku的正式模型名
+                    temperature=0.4,
+                    max_tokens=4096,
+                    anthropic_api_key=Config.ANTHROPIC_API_KEY
+                )
             else:
-                return ChatOpenAI(model='o3-mini', reasoning_effort="high")
+                return ChatOpenAI(model='o1-mini')
         except Exception as e:
             print(f"LLM 初始化失败 ({self.model_api}): {str(e)}")
             print("使用备用模型 o1-mini")
@@ -199,63 +218,6 @@ class Player:
         leader_task = ""
         other_players = [f"P{i}" for i in range(1, 6) if f"P{i}" != self.id]
 
-        def validate_leader_response(response: str) -> bool:
-            if not ("TeamSelection:" in response and "MagicTarget:" in response):
-                return False
-            
-            try:
-                # 验证队伍大小
-                team_part = response.split("TeamSelection:")[1].split("MagicTarget:")[0].strip()
-                team_members = [p.strip() for p in team_part.split() if p.strip()]
-
-                for i in range(len(team_members)):
-                    team_members[i] = clean_player_id(team_members[i])
-                
-                team_members = [p for p in team_members if p is not None][:required_team_size-1]
-
-                print(f"队长选择的队伍: {team_members}")
-
-                if len(team_members) != required_team_size - 1:
-                    print(f"队长选择的队伍大小不正确: 需要 {required_team_size-1} 人，实际选择了 {len(team_members)} 人")
-                    return False
-                
-                # 验证是否有重复队员
-                if len(set(team_members)) != len(team_members):
-                    print(f"队长选择的队伍中有重复队员: {team_members}")
-                    return False
-                
-                # 验证队长是否把自己也加入了队伍
-                if self.id in team_members:
-                    print(f"队长 {self.id} 不应该在 TeamSelection 中包含自己")
-                    return False
-                
-                # 验证魔法目标
-                magic_part = response.split("MagicTarget:")[1].strip().split()[0]
-                magic_part = clean_player_id(magic_part)
-                if not magic_part:
-                    print("队长没有选择魔法目标")
-                    return False
-                
-                # 验证魔法目标是否在队伍中（包括队长自己）
-                valid_targets = team_members + [self.id]
-                if magic_part not in valid_targets:
-                    print(f"魔法目标 {magic_part} 不在队伍中")
-                    return False
-                
-                # 验证通过后，直接设置 selected_team
-                
-                self.selected_team = valid_targets
-                print(f"解析的队员: {team_part}")
-                print(f"最终队伍: {self.selected_team}")
-
-                self.magic_target = clean_player_id(magic_part)
-                print(f"队长 {self.id} 选择的魔法目标: {self.magic_target}")
-                
-                return True
-            except Exception as e:
-                print(f"验证队长响应时出错: {e}")
-                return False
-
         if is_leader:
             if self.game_lang == 'en':
                 leader_info = f"""
@@ -265,6 +227,8 @@ class Player:
 
                     2. In the "magic_target" field, specify a target player ID for the magic token
                        - The target must be one of your "team_selection" members or yourself {self.id}
+                       - For blue team, the target can be someone you want to force to play a success card, assuming the target is not Morgan Le Fay.
+                       - For red team, you can use the magic token strategically to confuse the blue team.
                     
                     Note:
                     - You choice must be based on your analysis and thinking.
@@ -375,6 +339,8 @@ class Player:
 
                     Your teammates' IDs: {','.join(self.team_mates)}
 
+                    Are you Morgan Le Fay? {self.is_morgan}
+
                     Current round leader ID: {game_state['leader_id']}
 
                     All players: P1 P2 P3 P4 P5
@@ -382,33 +348,40 @@ class Player:
                     Recent information and chat history:
                     {self._get_current_memory()}
 
-                    Personal analysis history review:
-                    {self._get_summary_history()}
-
                     Game rules review:
                     {self.rules_text}
 
                     Please complete the following tasks and output your analysis in a JSON block in the [ANALYSIS_SPEECH] section:
 
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    👉 Please limit your reasoning depth (bounded by </think> tags) to no more than 3 layers and keep it under 300 words. When you are the leader, please do not miss the leader task.
                     
                     1. As a red team player, please analyze the following content and output your analysis in the "summary" field:
                     - Evaluate your team's trust level in other blue players' views by analyzing the results of previous tasks and everyone's speech
                     - Consider whether to hide your identity to build trust or create confusion to reduce blue team players' trust
+                    - If you are Morgan Le Fay, consider how to use the magic token to influence the situation; if you are not, then your teammate must be Morgan Le Fay, consider how to cooperate with him.
                     - Plan your strategy for the upcoming rounds
                     
                     Please note these rules when analyzing:
                     - Morgan Le Fay can ignore magic token restrictions and can still play fail cards even when targeted by magic
                     - A regular red player must play success cards when targeted by magic
                     - Players who have been leader cannot be chosen as leader again
+                    - Only 1 failure card is needed to fail the task. 
+                    - In this game, as long as a red player participates in the mission and can play a failure card, he will definitely play a failure card. So, unless there is a special strategy, it is best to avoid taking teammates to a mission.
 
                     2. Update your guesses about other players' identities, output in the "guess" field:
                     You are red team, you know exactly who is on which team. This is just a dummy task just to keep output format consistent. 
                     you just put you and your teammates' IDs as red, and the rest as blue. 
                     You can only guess one of red/blue/unknown for each player.
-                    3. Generate your next speech:
+
+                    3. Decide your next mission vote, and output in the "mission_vote" field, you need to make decision for two different scenarios:
+                    - If you are the only red player in the team, what do you vote? Output "success" or "failure" in the "1" field of"mission_vote" field.
+                    - If there are two red players in the team, what do you vote? Output "success" or "failure" in the "2" field of"mission_vote" field.
+                    - You want to avoid  
+
+                    4. Generate your next speech:
                     Output in the  "next_speech" field and give your 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
-                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech.
+                    You are seriously playing Quest, a social deduction game, no need to speek too dramatically.
                     """
                 
                 
@@ -422,6 +395,8 @@ class Player:
 
                         你队友的ID：{','.join(self.team_mates)}
 
+                        你是不是Morgan Le Fay? {self.is_morgan}
+
                         当前轮队长ID：{game_state['leader_id']}
 
                         场上所有玩家：P1 P2 P3 P4 P5
@@ -429,21 +404,24 @@ class Player:
                         最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
                         {self._get_current_memory()}
 
-                        个人历史分析回顾：
-                        {self._get_summary_history()}
-
                         游戏规则回顾：
                         {self.rules_text}
 
                         请完成以下任务，并以JSON格式输出你的分析在[ANALYSIS_SPEECH]中：
 
-                        提醒：请限制你思考的深度，不要超过5层，不要超过500字。
+                        👉提醒：请限制你思考的深度，不要超过3层，不要超过300字。当你是队长时，请注意不要错过队长任务。
                         
                             
                         一、 作为红方玩家，请基于以下结构分析当前局势，拟定策略，并将你的分析输出在"summary"字段里:
                         - 基于之前任务完成情况和玩家们的发言，评估你的团队在其他蓝方玩家眼中的可信度
                         - 考虑是否隐藏身份以建立信任或通过制造混乱来降低蓝方玩家的可信度
+                        - 如果你是Morgan Le Fay，请考虑如何利用魔法指示物来影响局势；如果你不是，那你的队友一定是Morgan Le Fay，请考虑如何配合他。
                         - 制定接下来的策略
+
+                        请注意以下规则：
+                        - Morgan Le Fay可以无视魔法指示物的限制，正常出失败牌，而另一名普通红方玩家在被使用魔法后，只能出成功牌。
+                        - 任务失败只需要1人出牌失败即可， 游戏实际上被设定为只要红方玩家参加任务，并且能够出失败牌，他一定会出失败牌，所以除非有特殊策略，尽可能不要带队友参加任务。
+                        - 已经当过队长的人，不可以再重复被选为队长。
                         
                         二、 更新对其他玩家的身份猜测，并在"guess"字段中以json格式输出你的猜测：
                         由于你是红方玩家，你确切知道谁在哪个阵营，这是一个虚拟任务，只是为了保持输出格式一致。
@@ -451,7 +429,7 @@ class Player:
 
                         三、 生成下一轮发言：
                         在"nextspeech"字段中给出一段100-200个字的发言。你可以尽情发挥策略性和误导性，争取进入任务并将其破坏；但同时绝对不要透露你和队友的身份。
-                        发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。
+                        发言在允许的范围内多样化, 尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。你在认真玩quest这个逻辑推理游戏，不需要在发言中过度的演戏。
                         """
                 
         else:
@@ -470,15 +448,13 @@ class Player:
                     Recent information and chat history (empty if this is the first round):
                     {self._get_current_memory()}
 
-                    Personal analysis history review:
-                    {self._get_summary_history()}
-
                     Game rules review:
                     {self.rules_text}
 
-                    Please complete the following tasks:
+                    Please complete the following tasks amd generate the outputs in a JSON format in the ANALYSIS_SPEECH section:
 
-                    Note: Please limit your thinking depth to no more than 5 layers and keep it under 500 words.
+                    Note: When you are the leader, you should not miss the leader task
+                    👉Note: Please limit your reasoning (bounded by </think> tags) depth to no more than 3 layers and keep it under 300 words.
                     
                     1. As a blue team player, please analyze the following content and output your analysis in the "summary" field:
                     - Try to identify each player's role and character (Morgan Le Fay) based on all past game history, conversation records.
@@ -494,10 +470,13 @@ class Player:
                     Guess 0-2 players most likely to be red from all players except yourself.
                     Then determine if the remaining players are blue or uncertain. alway put yourself as blue.
                     You can only guess one of red/blue/unknown for each player.
+                    If the red team has won 3 rounds, the game enters the final identification phase, and you must try your best to guess 2 red players.
+
                     3. Generate your next speech:
                     Output in the "next_speech" field and give your 100-200 word speech. If you talk about your trust and suspicions, they'd better align with your guess list.
                     If this is the first round with insufficient information, you may not express trust or suspicion of anyone.
-                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech
+                    Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech.
+                    You are seriously playing Quest, a social deduction game, no need to speek too dramatically.
                     """
 
                 
@@ -516,17 +495,14 @@ class Player:
                     最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
                     {self._get_current_memory()}
 
-                    个人历史分析回顾：
-                    {self._get_summary_history()}
-
                     游戏规则回顾：
                     {self.rules_text}
 
-                    你的游玩策略风格: {self.strategy}
+                    请完成以下任务，并以JSON格式输出你的分析在[ANALYSIS_SPEECH]中：
+                    
+                    请注意当你是队长时，不要错过队长任务.
 
-                    请完成以下任务：
-
-                    提醒：请限制你思考的深度，不要超过5层，不要超过500字。
+                    👉提醒：请限制你思考的深度，不要超过3层，不要超过300字。
                     
                     一、你是蓝方玩家，请综合分析以下内容，在"summary"字段中输出你对局势的分析和策略：
                     - 根据game_history和conversation_history，推理每个玩家的红蓝身份，尤其是Morgan Le Fay的身份。
@@ -541,63 +517,80 @@ class Player:
                     从除了你自己ID之外的其它玩家中猜测最有可能是红方的0-2个玩家。
                     然后，针对剩下的玩家，判断他们是蓝方还是unknown。永远把自己猜作蓝方。
                     对于每个玩家，你只能从red/blue/unknown中猜测一个身份。
+                    如果红方玩家已经赢下3局，则已经进入最终指认环节，这时候强制必须猜2个红方玩家。
 
                     三、 生成下一轮发言：
                     在"next_speech"字段中给出一段100-200个字的发言。如果谈论到你信任和怀疑的玩家，他们应该尽可能与你的guess清单一致。
                     如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的信任和怀疑。
-                    发言在允许的范围内个性化，增加游戏的趣味性,尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。
+                    发言在允许的范围内多样化, 尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。你在认真玩Quest这个逻辑推理游戏，不需要在发言中过度的演戏。
                     """     
             
+        
+        #个人历史分析回顾：
+        #{self._get_summary_history()}
+        # Personal analysis history review:
+                    # {self._get_summary_history()}
+        
         if is_leader:
             prompt = "\n".join([prompt_info, leader_info, prompt_task, leader_task])
         else:
             prompt = "\n".join([prompt_info, prompt_task])
 
-        # 生成响应，如果是队长且响应不符合要求则重试
-  
-        max_retries = 5
+        #print(prompt)
+        max_retries = 3
         retry_count = 0
-        while True:
-            if self.model_api.startswith('ollama'):
-                response = llm([HumanMessage(content=prompt)]).get("content", "")
-            else:
-                response = llm([HumanMessage(content=prompt)]).content
 
-            print(f"队长 {self.id} 的响应: {response}")
-            
-            if not is_leader or validate_leader_response(response):
-                break
-            
-            retry_count += 1
-            if retry_count >= max_retries:
-                print(f"警告：队长 {self.id} 的响应在 {max_retries} 次尝试后仍不符合要求")
-                break
-            
-            print(f"队长 {self.id} 的响应不包含必要元素，正在重试 ({retry_count}/{max_retries})")
+        if self.model_api.startswith('ollama'):
+            response = llm([HumanMessage(content=prompt)]).get("content", "")
+        else:
+            response = llm([HumanMessage(content=prompt)]).content
 
-        # 解析响应
-        try:
-            # 提取第一个完整的JSON对象
-            json_str = re.search(r'\{.*\}', response, re.DOTALL).group()
-            result = json.loads(json_str)
+        if self.id == 'P4':
+            print(response)
+        
+        self.process_response(response, is_leader)
+
+        if is_leader:
+            while True:  
+                #print(f"队长 {self.id} 的响应: {response}")
+                
+                if self.validate_leader_decisions(required_team_size):
+                    break
+                
+                retry_count += 1
+                
+                if retry_count >= max_retries:
+                    print(f"警告：队长 {self.id} 的响应在 {max_retries} 次尝试后仍不符合要求")
+                    break
+                
+                if self.model_api.startswith('ollama'):
+                    response = llm([HumanMessage(content=prompt)]).get("content", "")
+                else:
+                    response = llm([HumanMessage(content=prompt)]).content
+                
+                self.process_response(response, is_leader)
+                
+                print(f"队长 {self.id} 的响应不包含必要元素，正在重试 ({retry_count}/{max_retries})")
+        
+        return response
+
+    
+    def process_response(self, response: str, is_leader: bool):
+
+        parsed_data = parse_response(response, is_leader)
+        
+        # 处理公共字段
+        self.summary = parsed_data.get('summary', '')
+        self.next_speech = parsed_data.get('next_speech', '')
+        self.guess = parsed_data.get('guess', {})
+        
+        # 处理队长专属字段
+        if is_leader:
+            self.selected_team = parsed_data.get('team_selection', [])
+            self.magic_target = parsed_data.get('magic_target', '')
             
-            # 验证基本结构
-            if not ResponseValidator.validate(result, 'leader' if self.is_leader else 'common'):
-                raise ValueError("响应格式不符合要求")
-            
-            # 处理公共字段
-            self.summary = result.get('summary', '')
-            self.next_speech = result.get('speech', '')
-            
-            # 处理队长专属字段
-            if self.is_leader:
-                self.selected_team = result.get('team_selection', [])
-                self.magic_target = result.get('magic_target', '')
-            
-            return result
-        except Exception as e:
-            print(f"解析响应失败: {str(e)}")
-            return {}
+            # 自动加入队长自己到队伍
+            self.selected_team.append(self.id)
 
     def propose_team(self, required_size, llm):
         """生成队伍提议，根据身份猜测表选择队友"""
@@ -693,6 +686,33 @@ class Player:
                     red_guesses.update(to_add)
         
         return red_guesses
+
+    def validate_leader_decisions(self, required_team_size: int) -> bool:
+        """验证队长的选择是否符合规则"""
+        errors = []
+        
+        # 验证队伍选择
+        if len(self.selected_team) != required_team_size:
+            errors.append(f"队伍人数错误：需要{required_team_size}人，实际选择{len(self.selected_team)}人")
+        
+        # 验证是否有重复队员
+        if len(set(self.selected_team)) != len(self.selected_team):
+            errors.append(f"队伍中存在重复成员：{self.selected_team}")
+        
+        # 验证魔法目标
+        if not self.magic_target:
+            errors.append("未指定魔法目标")
+        elif self.magic_target not in self.selected_team:
+            errors.append(f"魔法目标 {self.magic_target} 不在有效队伍中（{valid_targets}）")
+        
+        # 输出错误信息
+        if errors:
+            print("\n".join([f"队长 {self.id} 验证失败："] + errors))
+            return False
+        
+        # 验证通过后设置最终队伍（包含队长自己）
+        print(f"队长 {self.id} 选择有效：队伍 {self.selected_team}，魔法目标 {self.magic_target}")
+        return True
 
 class AvalonSimulator:
     _current_lang = 'zh'  # 静态语言设置
@@ -1286,6 +1306,7 @@ class AvalonSimulator:
             morgan = random.choice(red_players)
         
         morgan.character_role = "morgan"
+        morgan.is_morgan = True
         print(f"{morgan.id} 是摩根勒菲")
         
         # 更新数据库中对应的 GamePlayer 记录
@@ -1430,6 +1451,64 @@ def parse_magic_target(self, response: str) -> str:
     except Exception as e:
         print(f"解析魔法目标失败: {str(e)}")
         return ""
+
+def parse_response(response: str, is_leader: bool) -> dict:
+    """解析玩家响应，支持单/双JSON块结构"""
+    result = {}
+    
+    try:
+        # 使用非贪婪匹配提取所有JSON块
+        analysis_match = re.search(
+            r'\[ANALYSIS_SPEECH\](.*?)\[/ANALYSIS_SPEECH\]', 
+            response, 
+            re.DOTALL
+        )
+        leader_match = re.search(
+            r'\[LEADER_TASK\](.*?)\[/LEADER_TASK\]', 
+            response, 
+            re.DOTALL
+        ) if is_leader else None
+
+        # 解析常规分析部分
+        if analysis_match:
+            analysis_data = json.loads(analysis_match.group(1).strip())
+            result.update({
+                'summary': analysis_data.get('summary', ''),
+                'guess': analysis_data.get('guess', {}),
+                'next_speech': analysis_data.get('next_speech', '')
+            })
+
+        # 解析队长任务部分
+        if leader_match:
+            leader_data = json.loads(leader_match.group(1).strip())
+            result.update({
+                'team_selection': leader_data.get('team_selection', []),
+                'magic_target': leader_data.get('magic_target', '')
+            })
+
+        # 验证数据结构
+        validator = ResponseValidator()
+        schema_type = 'leader' if is_leader else 'common'
+        if not validator.validate(result, schema_type):
+            raise ValueError("响应格式验证失败")
+
+        # 清理玩家ID
+        if 'team_selection' in result:
+            result['team_selection'] = [
+                clean_player_id(p) for p in result['team_selection'] 
+                if clean_player_id(p) is not None
+            ]
+        if 'magic_target' in result:
+            result['magic_target'] = clean_player_id(result['magic_target'])
+
+        return result
+
+    except json.JSONDecodeError as e:
+        print(f"JSON解析失败: {str(e)}")
+        return {}
+    except Exception as e:
+        print(f"解析响应时发生错误: {str(e)}")
+        return {}
 
 if __name__ == "__main__":
     terminal_output = TerminalOutput()

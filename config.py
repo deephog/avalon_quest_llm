@@ -15,4 +15,6 @@ class Config:
 
     # 管理员账号配置
     ADMIN_USERNAME = os.environ.get('AVALON_ADMIN_USERNAME', 'admin')
-    ADMIN_PASSWORD = os.environ.get('AVALON_ADMIN_PASSWORD', 'admin123') 
+    ADMIN_PASSWORD = os.environ.get('AVALON_ADMIN_PASSWORD', 'admin123')
+
+    ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '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') 
