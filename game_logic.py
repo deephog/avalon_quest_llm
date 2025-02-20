@@ -72,6 +72,7 @@ class Player:
         self.model_api = model_api or get_model_api()  # 使用指定的模型或默认模型
         self.game_lang = game_lang  # 游戏语言，影响 LLM 提示语
         self.llm = self._initialize_llm()
+        self.mission_vote = {"1": "success", "2": "success"}
         
         # 记忆系统
         self.current_memory = ConversationBufferMemory()
@@ -102,7 +103,7 @@ class Player:
                     model_name="accounts/fireworks/models/deepseek-r1",
                     fireworks_api_key=Config.FIREWORKS_API_KEY,
                     temperature=0.6,
-                    max_tokens=409600,
+                    max_tokens=65536,
                 )
             elif self.model_api == 'gemini':
                 return ChatOpenAI(
@@ -146,20 +147,22 @@ class Player:
             elif self.model_api == 'o3-mini-high':
                 return ChatOpenAI(
                     model='o3-mini',
-                    reasoning_effort="high"
+                    reasoning_effort="high",
+                    max_tokens=65536
                 )
             elif self.model_api == 'o3-mini-medium':
                 return ChatOpenAI(
                     model='o3-mini',
-                    reasoning_effort="medium"
+                    reasoning_effort="medium",
+                    max_tokens=65536
                 )
             elif self.model_api == 'claude-3.5-haiku':
-                return ChatAnthropic(
-                    model_name="claude-3-5-sonnet-20240620",  # Haiku的正式模型名
-                    temperature=0.4,
-                    max_tokens=4096,
-                    anthropic_api_key=Config.ANTHROPIC_API_KEY
-                )
+                return ChatOpenAI(model='o1-mini', max_tokens=65536)
+                # return ChatAnthropic(
+                #     model_name="claude-3-5-haiku-20241022",  # Haiku的正式模型名
+                #     temperature=0.6,
+                #     anthropic_api_key=Config.ANTHROPIC_API_KEY
+                # )
             else:
                 return ChatOpenAI(model='o1-mini')
         except Exception as e:
@@ -224,15 +227,15 @@ class Player:
                     Leader's Additional Tasks: As the current round leader, you need to complete these extra tasks, and output a JSON block in the [LEADER_TASK] section:
                     1. In the "team_selection" field, list the players other than yourself that you want to include in this mission (you will be automatically added to the team later).
                        - You must select exactly {required_team_size-1} players from {', '.join(other_players)}
+                       - Only 1 failure card is needed to fail the task. So if you are red team, you should avoid taking your teammates to a mission unless you have a special strategy.
 
                     2. In the "magic_target" field, specify a target player ID for the magic token
                        - The target must be one of your "team_selection" members or yourself {self.id}
                        - For blue team, the target can be someone you want to force to play a success card, assuming the target is not Morgan Le Fay.
-                       - For red team, you can use the magic token strategically to confuse the blue team.
                     
                     Note:
                     - You choice must be based on your analysis and thinking.
-                    - If you are Blue team, you should choose a player who you think is reliable (other blue team members), and be consistent with your speech as much as possible.
+                    - If you are Blue team, you should form a team with players who you think are reliable, and be consistent with your speech as much as possible.
                     - If you are Red team, you can consider a strategy to confuse the blue team, but you must strictly follow the format requirements.
                     """
                 
@@ -258,10 +261,11 @@ class Player:
 
                     2. 在magic_target字段中指定一名魔法指示物目标玩家的ID
                       - 目标必须是你选择的队员team_selection之一或你自己 {self.id}
-                    
+                      - 如果你是蓝方，目标通常是你要强迫其出成功牌的队员，假设目标不是摩根勒菲。
+
                     请记住：
                     - 你的选择应该基于你的分析和策略
-                    - 如果你是蓝方，应该选择你认为可信的玩家，并且要尽可能与你发言中说自己要带的人一致，否则会降低你的信任度
+                    - 如果你是蓝方，应该选择你认为可信的玩家加入队伍，并且要尽可能与你发言中说自己要带的人一致，否则会降低你的信任度
                     - 如果你是红方，可以考虑混淆视听的策略，但必须严格遵守数量和格式的规范。
                     """
                 
@@ -294,6 +298,10 @@ class Player:
                                 "P4": "red/blue/unknown",
                                 "P5": "red/blue/unknown"
                             }},
+                            "mission_vote": {{
+                                "1": "success/failure",
+                                "2": "success/failure"
+                            }},
                             "next_speech": "Your 100-200 words speech for the next round..."
                             }}
                             [/ANALYSIS_SPEECH]
@@ -314,6 +322,10 @@ class Player:
                                 "P3": "red/blue/unknown",
                                 "P4": "red/blue/unknown",
                                 "P5": "red/blue/unknown"
+                            }},
+                            "mission_vote": {{
+                                "1": "success/failure",
+                                "2": "success/failure"
                             }},
                             "next_speech": "你的下一轮发言内容，100-200字..."
                             }}
@@ -374,9 +386,10 @@ class Player:
                     You can only guess one of red/blue/unknown for each player.
 
                     3. Decide your next mission vote, and output in the "mission_vote" field, you need to make decision for two different scenarios:
+                    - Red team's goal is to fail the mission as much as possible, so you need to vote "failure" as much as possible.
                     - If you are the only red player in the team, what do you vote? Output "success" or "failure" in the "1" field of"mission_vote" field.
                     - If there are two red players in the team, what do you vote? Output "success" or "failure" in the "2" field of"mission_vote" field.
-                    - You want to avoid  
+                    - If you are the leader, remember to take magic token into consideration if you want to take your teammate to a mission.
 
                     4. Generate your next speech:
                     Output in the  "next_speech" field and give your 100-200 word speech. You can be strategic and misleading, never reveal your or your teammate's identity.
@@ -427,7 +440,13 @@ class Player:
                         由于你是红方玩家，你确切知道谁在哪个阵营，这是一个虚拟任务，只是为了保持输出格式一致。
                         你只需要把自己和你的队友们的猜成red，其他玩家猜作blue。对每个玩家只能从red/blue/unknown中猜测一个身份。
 
-                        三、 生成下一轮发言：
+                        三、 决定你的下一轮任务投票，并在"mission_vote"字段中输出你的投票结果：
+                        - 红方玩家的目的是尽可能让任务失败，你要尽可能投"failure"
+                        - 如果你是任务中唯一的红方玩家，请在"1"字段中输出你的投票结果，"success"或"failure"。
+                        - 如果队伍中有两名红方玩家，请在"2"字段中输出你的投票结果，"success"或"failure"。
+                        - 如果你是队长，并且你想要带你的队友进入任务，在尝试与队友配合时，请记得将魔法指示物的使用考虑进去。
+
+                        四、 生成下一轮发言：
                         在"nextspeech"字段中给出一段100-200个字的发言。你可以尽情发挥策略性和误导性，争取进入任务并将其破坏；但同时绝对不要透露你和队友的身份。
                         发言在允许的范围内多样化, 尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。你在认真玩quest这个逻辑推理游戏，不需要在发言中过度的演戏。
                         """
@@ -472,7 +491,10 @@ class Player:
                     You can only guess one of red/blue/unknown for each player.
                     If the red team has won 3 rounds, the game enters the final identification phase, and you must try your best to guess 2 red players.
 
-                    3. Generate your next speech:
+                    3. Decide your next mission vote, and output in the "mission_vote" field:
+                    You are a blue team player, this is just a dummy task to keep output format consistent. put "success" in both fields of "mission_vote".
+
+                    4. Generate your next speech:
                     Output in the "next_speech" field and give your 100-200 word speech. If you talk about your trust and suspicions, they'd better align with your guess list.
                     If this is the first round with insufficient information, you may not express trust or suspicion of anyone.
                     Make your speech unique and entertaining within reasonable bounds, avoid copying others' speeches, and do not include any thinking process in the speech.
@@ -519,7 +541,10 @@ class Player:
                     对于每个玩家，你只能从red/blue/unknown中猜测一个身份。
                     如果红方玩家已经赢下3局，则已经进入最终指认环节，这时候强制必须猜2个红方玩家。
 
-                    三、 生成下一轮发言：
+                    三、 决定你的下一轮任务投票，并在"mission_vote"字段中输出你的投票结果：
+                    你是一个蓝方玩家，这是一个dummy任务，只是为了保持输出格式一致。请在"mission_vote"的两个字段中都选择"success"。
+
+                    四、 生成下一轮发言：
                     在"next_speech"字段中给出一段100-200个字的发言。如果谈论到你信任和怀疑的玩家，他们应该尽可能与你的guess清单一致。
                     如果这是第一轮，信息不足的情况下，你也可以不发表对任何人的信任和怀疑。
                     发言在允许的范围内多样化, 尤其是不能跟别人发一模一样的话，不要把自己思考的过程写进去。你在认真玩Quest这个逻辑推理游戏，不需要在发言中过度的演戏。
@@ -544,9 +569,6 @@ class Player:
             response = llm([HumanMessage(content=prompt)]).get("content", "")
         else:
             response = llm([HumanMessage(content=prompt)]).content
-
-        if self.id == 'P4':
-            print(response)
         
         self.process_response(response, is_leader)
 
@@ -576,7 +598,6 @@ class Player:
 
     
     def process_response(self, response: str, is_leader: bool):
-
         parsed_data = parse_response(response, is_leader)
         
         # 处理公共字段
@@ -591,6 +612,17 @@ class Player:
             
             # 自动加入队长自己到队伍
             self.selected_team.append(self.id)
+
+        # 更新任务投票策略
+        if 'mission_vote' in parsed_data:
+            self.mission_vote = parsed_data['mission_vote']
+            print(f"玩家 {self.id} 任务投票策略更新: {self.mission_vote}")
+        
+        # # 更新猜测表
+        # if 'guess' in parsed_data:
+        #     for player_id, guess in parsed_data['guess'].items():
+        #         if player_id in self.guess:
+        #             self.guess[player_id] = guess.lower()
 
     def propose_team(self, required_size, llm):
         """生成队伍提议，根据身份猜测表选择队友"""
@@ -713,6 +745,59 @@ class Player:
         # 验证通过后设置最终队伍（包含队长自己）
         print(f"队长 {self.id} 选择有效：队伍 {self.selected_team}，魔法目标 {self.magic_target}")
         return True
+    
+    def _get_strategic_vote(self, red_count: int) -> bool:
+        """根据策略决定是否投失败票"""
+        # 获取投票策略（默认为failure）
+        strategy_key = "2" if red_count >= 2 else "1"
+        vote_decision = self.mission_vote.get(strategy_key, "failure").lower()
+        
+        # 有效性检查
+        valid_choices = {"success", "failure"}
+        if vote_decision not in valid_choices:
+            print(f"玩家 {self.id} 的无效投票策略: {vote_decision}, 使用默认值failure")
+            vote_decision = "failure"
+        
+        # True表示投成功票，False表示投失败票
+        return vote_decision == "success"  # 注意：返回False才会导致任务失败
+
+
+    # def get_mission_vote(self, team: List[str]) -> bool:
+    #     """根据当前队伍组成和策略决定投票结果"""
+    #     # 统计队伍中的红方玩家（包括自己）
+    #     red_in_team = [p for p in team if p in self.team_mates or p == self.id]
+    #     red_count = len(red_in_team)
+        
+    #     # 蓝方玩家始终投成功票
+    #     if self.role == "blue":
+    #         return True
+        
+    #     # 红方玩家逻辑
+    #     if self.role == "red":
+    #         # 摩根勒菲无视魔法指示物
+    #         if self.is_morgan:
+    #             return self._get_strategic_vote(red_count)
+            
+    #         # 普通红方被施加魔法必须投成功
+    #         if self.has_amulet:
+    #             return True
+            
+    #         return self._get_strategic_vote(red_count)
+
+    # def _get_strategic_vote(self, red_count: int) -> bool:
+    #     """根据策略决定是否投失败票"""
+    #     # 获取投票策略（默认为failure）
+    #     strategy_key = "2" if red_count >= 2 else "1"
+    #     vote_decision = self.mission_vote.get(strategy_key, "failure").lower()
+        
+    #     # 有效性检查
+    #     valid_choices = {"success", "failure"}
+    #     if vote_decision not in valid_choices:
+    #         print(f"玩家 {self.id} 的无效投票策略: {vote_decision}, 使用默认值failure")
+    #         vote_decision = "failure"
+        
+    #     # True表示投成功票，False表示投失败票
+    #     return vote_decision == "success"  # 注意：返回False才会导致任务失败
 
 class AvalonSimulator:
     _current_lang = 'zh'  # 静态语言设置
@@ -941,7 +1026,7 @@ class AvalonSimulator:
             # 将成员ID转换为Player对象
             player_obj = next((p for p in self.players if p.id == member), None)
             if player_obj:
-                vote = self.get_mission_vote(player_obj)
+                vote = self.get_mission_vote(player_obj, team)
             else:
                 raise ValueError(f"无效的成员ID: {member}")  # 默认处理无效成员
             if vote:
@@ -1101,36 +1186,29 @@ class AvalonSimulator:
             "required_team_size": self.task_sizes[self.round]
         }
 
-    def get_mission_vote(self, player: Player) -> bool:
-        """获取玩家的任务投票"""
-        if player.is_human:
-            if player.role == "red":
-                # 如果不是摩根且被施加魔法指示物，则只能投成功票
-                if player.character_role != "morgan" and player.has_amulet:
-                    self.output.send_message("你被魔法指示物强制，必须投成功票", 'action')
-                    return True
-                elif player.character_role == "morgan" and player.has_amulet:
-                    self.output.send_message("作为摩根勒菲，你无视了魔法指示物的限制", 'action')
-                prompt = "你是红方玩家，请输入数字选择你的投票：\n1 = 投成功票（任务成功）\n2 = 投失败票（任务失败）\n请输入1或2："
-                vote = self.output.get_player_input(prompt, player.id)
-                return vote.strip() == "1"
-            else:
-                self.output.send_message("你是蓝方玩家，只能投成功票", 'action')
+    def get_mission_vote(self, player, team: List[str]) -> bool:
+        """根据当前队伍组成和策略决定投票结果"""
+        # 统计队伍中的红方玩家（包括自己）
+        red_in_team = [p for p in team if p in player.team_mates or p == player.id]
+        red_count = len(red_in_team)
+        
+        # 蓝方玩家始终投成功票
+        if player.role == "blue":
+            return True
+        
+        # 红方玩家逻辑
+        if player.role == "red":
+            # 摩根勒菲无视魔法指示物
+            if player.is_morgan:
+                return player._get_strategic_vote(red_count)
+            
+            # 普通红方被施加魔法必须投成功
+            if player.has_amulet:
                 return True
-        else:
-            if player.role == "red":
-                # 摩根勒菲无视魔法指示物
-                if player.character_role == "morgan":
-                    return False #random.random() > 1.0  # 90%概率投失败
-                
-                # 普通红队玩家如果被施加魔法指示物必须投成功
-                if player.has_amulet:
-                    return True
-                
-                return False #random.random() > 0.9  # 90%概率投失败
-            else:
-                return True
+            
+            return player._get_strategic_vote(red_count)
 
+    
     def run_game(self, test_mode=False, p5_is_morgan=False):
         """
         运行游戏主循环
@@ -1475,6 +1553,7 @@ def parse_response(response: str, is_leader: bool) -> dict:
             result.update({
                 'summary': analysis_data.get('summary', ''),
                 'guess': analysis_data.get('guess', {}),
+                'mission_vote': analysis_data.get('mission_vote', {"1": "success", "2": "success"}),
                 'next_speech': analysis_data.get('next_speech', '')
             })
 
@@ -1500,6 +1579,13 @@ def parse_response(response: str, is_leader: bool) -> dict:
             ]
         if 'magic_target' in result:
             result['magic_target'] = clean_player_id(result['magic_target'])
+            
+        # 验证任务投票格式
+        if 'mission_vote' in result:
+            result['mission_vote'] = {
+                "1": result['mission_vote'].get("1", "success").lower(),
+                "2": result['mission_vote'].get("2", "success").lower()
+            }
 
         return result
 

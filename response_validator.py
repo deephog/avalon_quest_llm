@@ -7,6 +7,14 @@ SCHEMA = {
         "properties": {
             "summary": {"type": "string"},
             "next_speech": {"type": "string"},
+            "mission_vote": {
+                "type": "object",
+                "properties": {
+                    "1": {"enum": ["success", "failure"]},
+                    "2": {"enum": ["success", "failure"]}
+                },
+                "required": ["1", "2"]
+            },
             "guess": {
                 "type": "object",
                 "patternProperties": {
@@ -14,7 +22,7 @@ SCHEMA = {
                 }
             }
         },
-        "required": ["summary", "next_speech"]
+        "required": ["summary", "next_speech", "mission_vote"]
     },
     "leader": {
         "type": "object",
