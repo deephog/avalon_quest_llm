@@ -2,6 +2,9 @@ from models import db, Game, GamePlayer, IdentityGuess, GameRound
 from sqlalchemy import and_, func
 from flask import Flask
 from config import Config
+import json
+import matplotlib.pyplot as plt  # 新增
+import numpy as np  # 新增
 
 class GameAnalyzer:
     def __init__(self):
@@ -186,6 +189,887 @@ class GameAnalyzer:
             print(f"  红方: {stats['red']['winrate']}% ({stats['red']['wins']}/{stats['red']['games']})")
             print(f"  总体: {stats['overall']['winrate']}% (共{stats['overall']['total_games']}场)")
 
+    def analyze_model_performance(self, start_id: int, end_id: int):
+        """分析指定ID范围内每个位置(P1-P5)的表现"""
+        # 查询时过滤掉winner为空的游戏
+        games = Game.query.filter(
+            Game.id >= start_id,
+            Game.id <= end_id,
+            Game.winner.isnot(None)
+        ).all()
+        
+        # 打印总游戏数和有效游戏数
+        total_games = Game.query.filter(
+            Game.id >= start_id,
+            Game.id <= end_id
+        ).count()
+        valid_games = len(games)
+        print(f"\n分析范围: 游戏ID {start_id}-{end_id}")
+        print(f"总游戏数: {total_games}, 有效游戏数: {valid_games}")
+        
+        # 初始化统计数据
+        stats = {}
+        for i in range(1, 6):
+            stats[f"P{i}"] = {
+                "total_games": 0,
+                "total_wins": 0,
+                "red_games": 0,
+                "red_wins": 0,
+                "blue_games": 0,
+                "blue_wins": 0,
+                "perfect_guesses": 0,  # 完全猜中次数
+                "total_fails": 0,  # 个人不合规次数
+                "total_api_calls": 0,  # 个人API调用次数
+                # 新增加权表现值相关字段
+                "expected_wins": 0,  # 期望胜利次数
+                "performance_score": 0,  # 表现值
+                "standard_score": 0,  # 标准分
+                "selected_by_blue": 0,  # 被蓝方队长选中次数
+                "selected_as_red": 0,   # 作为红方被蓝方队长选中次数
+                "blue_leader_rounds": 0, # 蓝方担任队长的轮次总数
+                "selected_by_red": 0,    # 作为蓝方被红方队长选中次数
+                "red_leader_rounds": 0,  # 红方担任队长的轮次总数
+                "red_failed_missions": 0,  # 作为红方参与的失败任务数
+                "blue_leader_count": 0,     # 作为蓝方队长的次数
+                "blue_leader_fails": 0,     # 作为蓝方队长时任务失败的次数
+                "amulet_red_hits": 0,       # 作为蓝方队长时魔法指示物命中红方的次数
+                "red_leader_count": 0,      # 作为红方队长的次数
+                "red_epic_fails": 0,        # 作为红方队长时的致命失误次数
+                "red_early_inactive": 0,     # 作为红方时前两轮未参与任务的次数
+                "red_early_suspects": 0,     # 前两轮未参与时被蓝方玩家猜测为红方的总人次
+                "red_mistaken_as_blue": 0,  # 作为红方被误判为蓝方的总人次（猜测为蓝方或unknown）
+                "red_undetected": 0,  # 作为红方未被蓝方玩家识破的总人次（猜测为蓝方或unknown）
+                "first_selected_total_rounds": 0,  # 首次被蓝方队长选中的总轮次
+                "first_selected_games": 0,         # 被蓝方队长选中过的游戏数
+                "red_first_leader_total_rounds": 0,  # 作为红方首次被蓝方选为队长的总轮次
+                "red_first_leader_games": 0,         # 作为红方被蓝方选为队长的游戏数
+                "first_leader_total_rounds": 0,  # 首次被蓝方选为队长的总轮次
+                "first_leader_games": 0,         # 被蓝方选为队长的游戏数
+                "morgan_leader_count": 0,      # 作为摩根担任队长的次数
+                "morgan_self_amulet": 0,       # 作为摩根队长给自己魔法指示物的次数
+                "total_leader_count": 0,       # 作为队长的总次数
+                "total_self_amulet": 0,        # 作为队长给自己魔法指示物的总次数
+                "red_nonmorgan_leader": 0,     # 作为红方非摩根队长的次数
+                "red_nonmorgan_self": 0,       # 作为红方非摩根队长给自己魔法的次数
+                "red_leader_success": 0,  # 作为红方队长任务成功的次数
+                "actual_leader_total_rounds": 0,  # 实际被选为队长的总轮次
+                "actual_leader_games": 0,         # 实际被选为队长的游戏数
+            }
+        
+        # 统计每个位置的表现
+        for game in games:
+            winner = game.winner
+            players = GamePlayer.query.filter_by(game_id=game.id).all()
+            
+            # 获取本局轮数
+            rounds_count = GameRound.query.filter_by(game_id=game.id).count()
+            
+            # 获取红方玩家ID列表
+            red_players = {p.player_id for p in players if p.role == "red"}
+            
+            # 获取本局最后一轮
+            last_round = (GameRound.query
+                .filter_by(game_id=game.id)
+                .order_by(GameRound.id.desc())
+                .first())
+            
+            # 处理猜测数据
+            guesses = {}
+            if last_round:
+                all_guesses = IdentityGuess.query.filter_by(round_id=last_round.id).all()
+                for guess in all_guesses:
+                    if guess.guesser_id not in guesses:
+                        guesses[guess.guesser_id] = {}
+                    guesses[guess.guesser_id][guess.target_id] = guess.guessed_role
+            
+            # 记录本局每个玩家是否已被选中
+            selected_in_game = {pid: False for pid in stats}
+            current_round = 0
+            
+            # 获取每一轮的数据
+            rounds = GameRound.query.filter_by(game_id=game.id).order_by(GameRound.id).all()
+            for game_round in rounds:
+                current_round += 1
+                leader_id = game_round.leader_id
+                leader_player = next((p for p in players if p.player_id == leader_id), None)
+                if not leader_player:
+                    continue
+                
+                # 获取队员信息（共用）
+                raw_team_members = game_round.team_members.split('_')[0] if game_round.team_members else ""
+                team_members = [m.strip() for m in raw_team_members.split(',')] if raw_team_members else []
+                
+                # 部分1: 统计被蓝方队长选中的情况
+                if leader_player.role == "blue":
+                    # 统计首次被选中的轮次
+                    for member_id in team_members:
+                        if member_id == leader_id:
+                            continue
+                        if not selected_in_game[member_id]:
+                            selected_in_game[member_id] = True
+                            stats[member_id]["first_selected_total_rounds"] += current_round
+                            stats[member_id]["first_selected_games"] += 1
+                
+                # 部分2: 统计队长相关数据（无论红蓝方）
+                stats[leader_id]["total_leader_count"] += 1
+                
+                if '_' in game_round.team_members:
+                    amulet_target = game_round.team_members.split('_')[1].strip()
+                    if amulet_target == leader_id:  # 给自己魔法指示物
+                        stats[leader_id]["total_self_amulet"] += 1
+                        
+                        if leader_player.morgan:  # 是摩根
+                            stats[leader_id]["morgan_leader_count"] += 1
+                            stats[leader_id]["morgan_self_amulet"] += 1
+                        elif leader_player.role == "red":  # 是红方非摩根
+                            stats[leader_id]["red_nonmorgan_leader"] += 1
+                            stats[leader_id]["red_nonmorgan_self"] += 1
+                    else:  # 没给自己魔法指示物
+                        if leader_player.morgan:
+                            stats[leader_id]["morgan_leader_count"] += 1
+                        elif leader_player.role == "red":
+                            stats[leader_id]["red_nonmorgan_leader"] += 1
+                
+                if leader_player.role == "blue":
+                    # 统计蓝方队长次数
+                    stats[leader_id]["blue_leader_count"] += 1
+                    
+                    # 更新所有玩家的蓝方队长轮次计数
+                    for pid in stats:
+                        stats[pid]["blue_leader_rounds"] += 1
+                    
+                    # 统计被选中情况
+                    for member_id in team_members:
+                        if member_id == leader_id:
+                            continue  # 不统计队长自己
+                        
+                        member_player = next((p for p in players if p.player_id == member_id), None)
+                        if not member_player:
+                            continue
+                        
+                        stats[member_id]["selected_by_blue"] += 1
+                        if member_player.role == "red":  # 如果被选中的是红方玩家
+                            stats[member_id]["selected_as_red"] += 1
+                    
+                    # 检查魔法指示物使用情况
+                    if '_' in game_round.team_members:
+                        amulet_target = game_round.team_members.split('_')[1].strip()
+                        target_player = next((p for p in players if p.player_id == amulet_target), None)
+                        
+                        # 如果目标是红方，记录命中
+                        if target_player and target_player.role == "red":
+                            stats[leader_id]["amulet_red_hits"] += 1
+                    
+                    # 统计任务失败
+                    if game_round.result == "fail":
+                        stats[leader_id]["blue_leader_fails"] += 1
+                else:  # 红方队长
+                    # 统计红方队长次数
+                    stats[leader_id]["red_leader_count"] += 1
+                    
+                    # 统计任务成功的情况
+                    if game_round.result == "success":
+                        stats[leader_id]["red_leader_success"] += 1
+                    
+                    # 更新所有玩家的红方队长轮次计数
+                    for pid in stats:
+                        stats[pid]["red_leader_rounds"] += 1
+                    
+                    # 统计被选中情况
+                    for member_id in team_members:
+                        if member_id == leader_id:
+                            continue  # 不统计队长自己
+                        
+                        member_player = next((p for p in players if p.player_id == member_id), None)
+                        if not member_player:
+                            continue
+                        
+                        # 如果是蓝方玩家，记录被红方队长选中
+                        if member_player.role == "blue":
+                            stats[member_id]["selected_by_red"] += 1
+                    
+                    # 检查是否发生致命失误
+                    if '_' in game_round.team_members:
+                        raw_team_members = game_round.team_members.split('_')[0]
+                        team_members = [m.strip() for m in raw_team_members.split(',')] if raw_team_members else []
+                        amulet_target = game_round.team_members.split('_')[1].strip()
+                        
+                        # 检查是否选择了红方队友
+                        has_red_teammate = False
+                        for member_id in team_members:
+                            if member_id == leader_id:
+                                continue
+                            member_player = next((p for p in players if p.player_id == member_id), None)
+                            if member_player and member_player.role == "red":
+                                has_red_teammate = True
+                                break
+                        
+                        # 检查魔法指示物是否给了摩根
+                        amulet_player = next((p for p in players if p.player_id == amulet_target), None)
+                        gave_amulet_to_morgan = amulet_player and amulet_player.morgan
+                        
+                        # 如果两个条件都满足，记录致命失误
+                        if has_red_teammate and gave_amulet_to_morgan:
+                            stats[leader_id]["red_epic_fails"] += 1
+            
+            # 处理每个玩家的基本统计
+            for player in players:
+                pid = player.player_id
+                role = player.role
+                fails = player.user_id or 0
+                
+                # 更新总场次和胜负
+                stats[pid]["total_games"] += 1
+                if role == winner:
+                    stats[pid]["total_wins"] += 1
+                
+                # 更新阵营场次
+                if role == "red":
+                    stats[pid]["red_games"] += 1
+                    if winner == "red":
+                        stats[pid]["red_wins"] += 1
+                else:
+                    stats[pid]["blue_games"] += 1
+                    if winner == "blue":
+                        stats[pid]["blue_wins"] += 1
+                
+                # 如果是蓝方玩家，检查猜测准确性
+                if role == "blue" and pid in guesses:
+                    player_red_guesses = {
+                        target_id for target_id, guessed_role in guesses[pid].items()
+                        if guessed_role.lower() == "red"
+                    }
+                    if player_red_guesses == red_players:  # 两个红方都猜中
+                        stats[pid]["perfect_guesses"] += 1
+                
+                # 更新个人统计
+                stats[pid]["total_fails"] += fails
+                stats[pid]["total_api_calls"] += (rounds_count + 1)
+                
+                # 如果是红方玩家，统计未被识破和误判情况
+                if role == "red":  # 移除 winner == "red" 条件
+                    undetected_count = 0  # 记录未识破的蓝方玩家数量
+                    mistaken_count = 0    # 记录误判为蓝方的蓝方玩家数量
+                    
+                    # 检查每个蓝方玩家的猜测
+                    for guesser in players:
+                        if guesser.role != "blue":  # 只看蓝方玩家的猜测
+                            continue
+                            
+                        # 找到这个蓝方玩家对该红方玩家的猜测
+                        player_guess = next(
+                            (g for g in all_guesses if g.guesser_id == guesser.player_id and g.target_id == pid),
+                            None
+                        )
+                        
+                        # 统计未识破（没有猜测或猜测不是red）
+                        if not player_guess or player_guess.guessed_role.lower() != "red":
+                            undetected_count += 1
+                            # 如果明确猜测为蓝方，计入误判
+                            if player_guess and player_guess.guessed_role.lower() == "blue":
+                                mistaken_count += 1
+                    
+                    # 累加统计数据
+                    stats[pid]["red_undetected"] += undetected_count
+                    stats[pid]["red_mistaken_as_blue"] += mistaken_count
+            
+            # 获取每一轮的数据并统计
+            rounds = GameRound.query.filter_by(game_id=game.id).order_by(GameRound.id).all()
+            for game_round in rounds:
+                # 只统计失败的任务
+                if game_round.result != "fail":
+                    continue
+                
+                # 获取该轮队员信息
+                raw_team_members = game_round.team_members.split('_')[0] if game_round.team_members else ""
+                team_members = [m.strip() for m in raw_team_members.split(',')] if raw_team_members else []
+                
+                # 统计参与失败任务的红方玩家
+                for member_id in team_members:
+                    member_player = next((p for p in players if p.player_id == member_id), None)
+                    if not member_player or member_player.role != "red":
+                        continue
+                    
+                    stats[member_id]["red_failed_missions"] += 1
+            
+            # 获取前两轮数据
+            early_rounds = (GameRound.query
+                .filter_by(game_id=game.id)
+                .order_by(GameRound.id)
+                .limit(2)
+                .all())
+            
+            if len(early_rounds) < 2:  # 跳过不足两轮的游戏
+                continue
+            
+            # 记录每个红方玩家在前两轮的参与情况
+            for player in players:
+                if player.role != "red":
+                    continue
+                
+                # 检查是否参与前两轮
+                participated = False
+                for round in early_rounds:
+                    if player.player_id == round.leader_id:  # 是队长
+                        participated = True
+                        break
+                        
+                    # 检查是否是队员
+                    raw_team_members = round.team_members.split('_')[0] if round.team_members else ""
+                    team_members = [m.strip() for m in raw_team_members.split(',')] if raw_team_members else []
+                    if player.player_id in team_members:  # 是队员
+                        participated = True
+                        break
+                
+                if not participated:  # 前两轮都没参与
+                    stats[player.player_id]["red_early_inactive"] += 1
+                    
+                    # 获取第二轮的猜测数据
+                    round2_guesses = IdentityGuess.query.filter_by(round_id=early_rounds[1].id).all()
+                    suspect_count = 0  # 记录猜测为红方的蓝方玩家数量
+                    
+                    # 检查每个蓝方玩家的猜测
+                    for guesser in players:
+                        if guesser.role != "blue":  # 只看蓝方玩家的猜测
+                            continue
+                            
+                        # 找到这个蓝方玩家对目标玩家的猜测
+                        player_guess = next(
+                            (g for g in round2_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id), 
+                            None
+                        )
+                        
+                        # 如果明确猜测为红方，增加计数
+                        if player_guess and player_guess.guessed_role.lower() == "red":
+                            suspect_count += 1
+                    
+                    # 累加被怀疑次数
+                    stats[player.player_id]["red_early_suspects"] += suspect_count
+            
+            # 记录本局每个玩家是否已当过队长
+            been_leader = {pid: False for pid in stats}
+            current_round = 0
+            
+            # 获取每一轮的数据
+            rounds = GameRound.query.filter_by(game_id=game.id).order_by(GameRound.id).all()
+            for game_round in rounds:
+                current_round += 1
+                if current_round == 1:  # 跳过第一轮
+                    continue
+                
+                # 获取上一轮的队长（选择者）
+                prev_round = rounds[current_round - 2]  # current_round从1开始，所以这里是-2
+                prev_leader = next((p for p in players if p.player_id == prev_round.leader_id), None)
+                
+                # 只统计蓝方队长选择的情况
+                if not prev_leader or prev_leader.role != "blue":
+                    continue
+                
+                # 获取当前轮的队长（被选择者）
+                current_leader = next((p for p in players if p.player_id == game_round.leader_id), None)
+                if not current_leader:
+                    continue
+                
+                # 如果是该玩家首次被选为队长
+                if not been_leader[current_leader.player_id]:
+                    been_leader[current_leader.player_id] = True
+                    stats[current_leader.player_id]["first_leader_total_rounds"] += current_round
+                    stats[current_leader.player_id]["first_leader_games"] += 1
+                    # 记录实际被选为队长的情况
+                    stats[current_leader.player_id]["actual_leader_total_rounds"] += current_round
+                    stats[current_leader.player_id]["actual_leader_games"] += 1
+        
+        # 计算全局基准胜率
+        total_red_games = sum(data["red_games"] for data in stats.values())
+        total_red_wins = sum(data["red_wins"] for data in stats.values())
+        total_blue_games = sum(data["blue_games"] for data in stats.values())
+        total_blue_wins = sum(data["blue_wins"] for data in stats.values())
+        
+        red_base_winrate = total_red_wins / total_red_games if total_red_games > 0 else 0
+        blue_base_winrate = total_blue_wins / total_blue_games if total_blue_games > 0 else 0
+        
+        # 计算每个玩家的加权表现值
+        for pid, data in stats.items():
+            # 计算期望胜利次数
+            expected_red_wins = data["red_games"] * red_base_winrate
+            expected_blue_wins = data["blue_games"] * blue_base_winrate
+            data["expected_wins"] = expected_red_wins + expected_blue_wins
+            
+            # 计算实际表现值
+            actual_wins = data["total_wins"]
+            data["performance_score"] = actual_wins - data["expected_wins"]
+            
+            # 计算标准分
+            total_games = data["total_games"]
+            data["standard_score"] = (data["performance_score"] / total_games * 100) if total_games > 0 else 0
+        
+        return stats
+
+    def _calculate_logic_stats(self, stats):
+        """计算所有玩家的逻辑推理统计数据"""
+        # 收集所有玩家的数据
+        all_stats = {
+            'guess_rates': [],
+            'amulet_rates': [],
+            'fail_rates': [],
+            'red_success_rates': []
+        }
+        
+        for data in stats.values():
+            # 猜中红方率
+            if data["blue_games"] > 0:
+                guess_rate = (data["perfect_guesses"] / data["blue_games"] * 100)
+                all_stats['guess_rates'].append(guess_rate)
+                
+            # 魔法命中率
+            if data["blue_leader_count"] > 0:
+                amulet_rate = (data["amulet_red_hits"] / data["blue_leader_count"] * 100)
+                all_stats['amulet_rates'].append(amulet_rate)
+                
+            # 蓝方队长失败率
+            if data["blue_leader_count"] > 0:
+                fail_rate = (data["blue_leader_fails"] / data["blue_leader_count"] * 100)
+                all_stats['fail_rates'].append(fail_rate)
+                
+            # 红方队长成功率
+            if data["red_leader_count"] > 0:
+                success_rate = (data["red_leader_success"] / data["red_leader_count"] * 100)
+                all_stats['red_success_rates'].append(success_rate)
+        
+        # 计算平均值和标准差
+        stats = {}
+        for key, values in all_stats.items():
+            if values:
+                mean = sum(values) / len(values)
+                std = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5
+                stats[key] = {'mean': mean, 'std': std}
+            else:
+                stats[key] = {'mean': 0, 'std': 1}  # 避免除以0
+                
+        return stats
+
+    def _calculate_logic_score(self, player_stats, base_stats):
+        """计算单个玩家的逻辑推理得分"""
+        scores = {}
+        
+        # 猜中红方率
+        if player_stats["blue_games"] > 0:
+            guess_rate = (player_stats["perfect_guesses"] / player_stats["blue_games"] * 100)
+            scores['guess'] = (guess_rate - base_stats['guess_rates']['mean']) / base_stats['guess_rates']['std']
+        else:
+            scores['guess'] = 0
+            
+        # 魔法命中率
+        if player_stats["blue_leader_count"] > 0:
+            amulet_rate = (player_stats["amulet_red_hits"] / player_stats["blue_leader_count"] * 100)
+            scores['amulet'] = (amulet_rate - base_stats['amulet_rates']['mean']) / base_stats['amulet_rates']['std']
+        else:
+            scores['amulet'] = 0
+            
+        # 蓝方队长失败率（反指标）
+        if player_stats["blue_leader_count"] > 0:
+            fail_rate = (player_stats["blue_leader_fails"] / player_stats["blue_leader_count"] * 100)
+            scores['fail'] = -(fail_rate - base_stats['fail_rates']['mean']) / base_stats['fail_rates']['std']
+        else:
+            scores['fail'] = 0
+            
+        # 红方队长成功率（反指标）
+        if player_stats["red_leader_count"] > 0:
+            success_rate = (player_stats["red_leader_success"] / player_stats["red_leader_count"] * 100)
+            scores['red_success'] = -(success_rate - base_stats['red_success_rates']['mean']) / base_stats['red_success_rates']['std']
+        else:
+            scores['red_success'] = 0
+            
+        # 计算加权总分
+        total_score = (scores['guess'] * 0.3 + 
+                      scores['amulet'] * 0.3 + 
+                      scores['fail'] * 0.3 + 
+                      scores['red_success'] * 0.1)
+                      
+        return scores, total_score
+
+    def _calculate_persuasion_stats(self, stats):
+        """计算所有玩家的说服力/欺骗性统计数据"""
+        all_stats = {
+            'selection_rates': [],      # 1. 平均每几轮被带入一次
+            'suspect_counts': [],       # 2. 前两轮未参与时被怀疑人数
+            'fail_rates': [],          # 3. 作为红方参与失败任务(+1后)
+            'undetected_counts': [],    # 4. 未被识破的人数
+            'first_selected': [],       # 5. 首次被带入任务轮次
+            'leader_rounds': []         # 6. 被选为队长的轮次
+        }
+        
+        for data in stats.values():
+            # 1. 平均被带入频率
+            if data["blue_leader_rounds"] > 0 and data["selected_by_blue"] > 0:
+                selection_rate = data["blue_leader_rounds"] / data["selected_by_blue"]
+                all_stats['selection_rates'].append(selection_rate)
+            
+            # 2. 前两轮未参与被怀疑
+            if data["red_early_inactive"] > 0:
+                suspect_rate = data["red_early_suspects"] / data["red_early_inactive"]
+                all_stats['suspect_counts'].append(suspect_rate)
+            
+            # 3. 红方参与失败任务
+            if data["red_games"] > 0:
+                fail_rate = (data["red_failed_missions"] / data["red_games"]) + 1
+                all_stats['fail_rates'].append(fail_rate)
+            
+            # 4. 未被识破人数
+            if data["red_games"] > 0:
+                undetected = data["red_undetected"] / data["red_games"]
+                all_stats['undetected_counts'].append(undetected)
+            
+            # 5. 首次被带入任务轮次
+            if data["first_selected_games"] > 0:
+                first_selected = data["first_selected_total_rounds"] / data["first_selected_games"]
+                all_stats['first_selected'].append(first_selected)
+            
+            # 6. 被选为队长的轮次
+            if data["actual_leader_games"] > 0:
+                leader_round = data["actual_leader_total_rounds"] / data["actual_leader_games"]
+                all_stats['leader_rounds'].append(leader_round)
+        
+        # 计算平均值和标准差
+        stats = {}
+        for key, values in all_stats.items():
+            if values:
+                mean = sum(values) / len(values)
+                std = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5
+                stats[key] = {'mean': mean, 'std': std}
+            else:
+                stats[key] = {'mean': 0, 'std': 1}
+            
+        return stats
+
+    def _calculate_api_stats(self, stats):
+        """计算所有玩家的API稳定性统计数据"""
+        all_stats = {
+            'error_rates': []  # 每多少次API调用产生一次不合规
+        }
+        
+        for data in stats.values():
+            if data["total_fails"] > 0:  # 只统计有不合规记录的情况
+                error_rate = data["total_api_calls"] / data["total_fails"]
+                all_stats['error_rates'].append(error_rate)
+        
+        # 计算平均值和标准差
+        stats = {}
+        if all_stats['error_rates']:
+            mean = sum(all_stats['error_rates']) / len(all_stats['error_rates'])
+            std = (sum((x - mean) ** 2 for x in all_stats['error_rates']) / len(all_stats['error_rates'])) ** 0.5
+            stats['error_rates'] = {'mean': mean, 'std': std}
+        else:
+            stats['error_rates'] = {'mean': 0, 'std': 1}
+        
+        return stats
+
+    def _calculate_winrate_stats(self, stats):
+        """计算所有玩家的胜率统计数据"""
+        all_stats = {
+            'blue_winrates': [],  # 蓝方胜率
+            'red_winrates': [],   # 红方胜率
+            'total_winrates': []  # 总体胜率（加权）
+        }
+        
+        for data in stats.values():
+            # 蓝方胜率
+            if data["blue_games"] > 0:
+                blue_wr = (data["blue_wins"] / data["blue_games"] * 100)
+                all_stats['blue_winrates'].append(blue_wr)
+            
+            # 红方胜率
+            if data["red_games"] > 0:
+                red_wr = (data["red_wins"] / data["red_games"] * 100)
+                all_stats['red_winrates'].append(red_wr)
+            
+            # 总体胜率（根据实际参与局数加权）
+            if data["total_games"] > 0:
+                total_wr = (data["total_wins"] / data["total_games"] * 100)
+                all_stats['total_winrates'].append(total_wr)
+        
+        # 计算平均值和标准差
+        stats = {}
+        for key, values in all_stats.items():
+            if values:
+                mean = sum(values) / len(values)
+                std = (sum((x - mean) ** 2 for x in values) / len(values)) ** 0.5
+                stats[key] = {'mean': mean, 'std': std}
+            else:
+                stats[key] = {'mean': 0, 'std': 1}
+            
+        return stats
+
+    def print_model_analysis(self, stats):
+        """打印模型表现分析结果"""
+        print("\n=== 模型表现分析 ===")
+        
+        # 计算全局基准胜率
+        total_red_games = sum(data["red_games"] for data in stats.values())
+        total_red_wins = sum(data["red_wins"] for data in stats.values())
+        total_blue_games = sum(data["blue_games"] for data in stats.values())
+        total_blue_wins = sum(data["blue_wins"] for data in stats.values())
+        
+        red_base_winrate = total_red_wins / total_red_games * 100 if total_red_games > 0 else 0
+        blue_base_winrate = total_blue_wins / total_blue_games * 100 if total_blue_games > 0 else 0
+        
+        print(f"\n基准胜率:")
+        print(f"  红方: {red_base_winrate:.1f}%")
+        print(f"  蓝方: {blue_base_winrate:.1f}%")
+        print(f"  阵营差异: {abs(blue_base_winrate - red_base_winrate):.1f}%")
+        
+        # 按标准分排序
+        sorted_players = sorted(
+            stats.items(),
+            key=lambda x: x[1]["standard_score"],
+            reverse=True
+        )
+        
+        # 计算基准统计数据
+        base_stats = self._calculate_logic_stats(stats)
+        persuasion_stats = self._calculate_persuasion_stats(stats)
+        api_stats = self._calculate_api_stats(stats)
+        winrate_stats = self._calculate_winrate_stats(stats)  # 添加胜率统计
+        
+        for pid, data in sorted_players:
+            total_wr = (data["total_wins"] / data["total_games"] * 100) if data["total_games"] > 0 else 0
+            red_wr = (data["red_wins"] / data["red_games"] * 100) if data["red_games"] > 0 else 0
+            blue_wr = (data["blue_wins"] / data["blue_games"] * 100) if data["blue_games"] > 0 else 0
+            guess_rate = (data["perfect_guesses"] / data["blue_games"] * 100) if data["blue_games"] > 0 else 0
+            
+            # 计算个人的API调用错误率
+            avg_fails = data["total_fails"] / data["total_games"] if data["total_games"] > 0 else 0
+            
+            # 计算平均被选中频率
+            blue_selection_rate = (data["blue_leader_rounds"] / data["selected_by_blue"]) if data["selected_by_blue"] > 0 else float('inf')
+            red_selection_rate = (data["red_leader_rounds"] / data["selected_by_red"]) if data["selected_by_red"] > 0 else float('inf')
+            
+            # 计算红方玩家平均每局参与失败任务数
+            avg_failed_missions = (data["red_failed_missions"] / data["red_games"]) if data["red_games"] > 0 else 0
+            
+            # 计算魔法指示物命中率
+            amulet_hit_rate = (data["amulet_red_hits"] / data["blue_leader_count"] * 100) if data["blue_leader_count"] > 0 else 0
+            
+            # 计算蓝方队长任务失败率
+            blue_leader_fail_rate = (data["blue_leader_fails"] / data["blue_leader_count"] * 100) if data["blue_leader_count"] > 0 else 0
+            
+            # 计算红方队长致命失误率
+            red_epic_fail_rate = (data["red_epic_fails"] / data["red_leader_count"] * 100) if data["red_leader_count"] > 0 else 0
+            
+            # 计算平均被怀疑人数
+            avg_suspects = (data["red_early_suspects"] / data["red_early_inactive"]) if data["red_early_inactive"] > 0 else 0
+            
+            # 计算平均每局未被识破和误判人数（使用所有红方局数）
+            avg_undetected = (data["red_undetected"] / data["red_games"]) if data["red_games"] > 0 else 0
+            avg_mistaken = (data["red_mistaken_as_blue"] / data["red_games"]) if data["red_games"] > 0 else 0
+            
+            # 修改平均首次被选中轮次的计算
+            # 如果从未被选中，就当作是第5轮
+            if data["first_selected_games"] == 0:
+                data["first_selected_total_rounds"] = 5  # 设为第5轮
+                data["first_selected_games"] = 1         # 设为1次，避免除以0
+            
+            avg_first_selected = data["first_selected_total_rounds"] / data["first_selected_games"]
+            
+            # 修改平均首次被选为队长轮次的计算
+            # 如果从未被选为队长，就当作是第5轮
+            if data["first_leader_games"] == 0:
+                data["first_leader_total_rounds"] = 5  # 设为第5轮
+                data["first_leader_games"] = 1         # 设为1次，避免除以0
+            
+            avg_first_leader_all = data["first_leader_total_rounds"] / data["first_leader_games"]
+            
+            print(f"\n位置 {pid}:")
+            print(f"  总体胜率表现：")
+            
+            winrate_scores = {}  # 用于存储胜率得分
+            
+            # 计算并显示红方胜率
+            if data["red_games"] > 0:
+                red_wr = (data["red_wins"] / data["red_games"] * 100)
+                red_score = (red_wr - winrate_stats['red_winrates']['mean']) / winrate_stats['red_winrates']['std']
+                winrate_scores['red'] = red_score
+                print(f"  红方胜率: {red_wr:.1f}% ({data['red_wins']}/{data['red_games']}), {red_score:+.2f}σ")
+            
+            # 计算并显示蓝方胜率
+            if data["blue_games"] > 0:
+                blue_wr = (data["blue_wins"] / data["blue_games"] * 100)
+                blue_score = (blue_wr - winrate_stats['blue_winrates']['mean']) / winrate_stats['blue_winrates']['std']
+                winrate_scores['blue'] = blue_score
+                print(f"  蓝方胜率: {blue_wr:.1f}% ({data['blue_wins']}/{data['blue_games']}), {blue_score:+.2f}σ")
+            
+            # 计算并显示胜率总体得分
+            if winrate_scores:
+                winrate_total_score = sum(winrate_scores.values()) / len(winrate_scores.values())
+                print(f"  胜率总体得分: {winrate_total_score:+.2f}σ")
+            
+            print(f"  \n  逻辑推理表现：")
+            scores, total_score = self._calculate_logic_score(data, base_stats)
+            
+            if data["blue_games"] > 0:
+                guess_rate = (data["perfect_guesses"] / data["blue_games"] * 100)
+                print(f"  作为蓝方玩家猜中两名红方: {guess_rate:.1f}% ({data['perfect_guesses']}/{data['blue_games']}), {scores['guess']:+.2f}σ")
+            
+            if data["blue_leader_count"] > 0:
+                amulet_rate = (data["amulet_red_hits"] / data["blue_leader_count"] * 100)
+                print(f"  魔法指示物命中红方: {data['amulet_red_hits']}/{data['blue_leader_count']}次 ({amulet_rate:.1f}%), {scores['amulet']:+.2f}σ")
+                
+                fail_rate = (data["blue_leader_fails"] / data["blue_leader_count"] * 100)
+                print(f"  作为蓝方队长任务失败: {data['blue_leader_fails']}/{data['blue_leader_count']}次 ({fail_rate:.1f}%), {scores['fail']:+.2f}σ")
+            else:
+                print("  从未担任蓝方队长")
+            
+            if data["red_leader_count"] > 0:
+                success_rate = (data["red_leader_success"] / data["red_leader_count"] * 100)
+                print(f"  作为红方队长任务成功: {data['red_leader_success']}/{data['red_leader_count']}次 ({success_rate:.1f}%), {scores['red_success']:+.2f}σ")
+            
+            print(f"  逻辑推理总分: {total_score:+.2f}σ")
+
+            print(f"  \n  说服力/欺骗性表现：")
+            scores = {}
+            
+            # 1. 平均被带入频率（显示原始偏差，越大表示被带入频率低）
+            if data["blue_leader_rounds"] > 0 and data["selected_by_blue"] > 0:
+                selection_rate = data["blue_leader_rounds"] / data["selected_by_blue"]
+                raw_score = (selection_rate - persuasion_stats['selection_rates']['mean']) / persuasion_stats['selection_rates']['std']
+                scores['selection'] = -raw_score  # 在计算总分时反转
+                print(f"  平均每{selection_rate:.1f}轮被蓝方队长带入一次, {raw_score:+.2f}σ")
+            
+            # 2. 前两轮未参与被怀疑（显示原始偏差，越大表示被怀疑的人多）
+            if data["red_early_inactive"] > 0:
+                suspect_rate = data["red_early_suspects"] / data["red_early_inactive"]
+                raw_score = (suspect_rate - persuasion_stats['suspect_counts']['mean']) / persuasion_stats['suspect_counts']['std']
+                scores['suspect'] = -raw_score  # 在计算总分时反转
+                print(f"  作为红方前两轮未参与时平均被{suspect_rate:.1f}个蓝方玩家怀疑, {raw_score:+.2f}σ")
+            
+            # 3. 红方参与失败任务（显示原始偏差，越大表示失败次数多）
+            if data["red_games"] > 0:
+                fail_rate = (data["red_failed_missions"] / data["red_games"]) + 1
+                raw_score = (fail_rate - persuasion_stats['fail_rates']['mean']) / persuasion_stats['fail_rates']['std']
+                scores['fail'] = raw_score  # 正向指标，不需要反转
+                print(f"  作为红方参与失败任务: 总计{data['red_failed_missions']}次, 平均每局{fail_rate:.2f}次, {raw_score:+.2f}σ")
+            
+            # 4. 未被识破人数（显示原始偏差，越大表示未被识破的人多）
+            if data["red_games"] > 0:
+                undetected = data["red_undetected"] / data["red_games"]
+                raw_score = (undetected - persuasion_stats['undetected_counts']['mean']) / persuasion_stats['undetected_counts']['std']
+                scores['undetected'] = raw_score  # 正向指标，不需要反转
+                print(f"  作为红方平均每局有{undetected:.1f}个蓝方玩家未识破身份, {raw_score:+.2f}σ")
+            
+            # 5. 首次被带入任务轮次（显示原始偏差，越大表示轮次晚）
+            if data["first_selected_games"] > 0:
+                first_selected = data["first_selected_total_rounds"] / data["first_selected_games"]
+                raw_score = (first_selected - persuasion_stats['first_selected']['mean']) / persuasion_stats['first_selected']['std']
+                scores['first_selected'] = -raw_score  # 在计算总分时反转
+                print(f"  平均在第{first_selected:.1f}轮首次被蓝方队长带入任务, {raw_score:+.2f}σ")
+            
+            # 6. 被选为队长的轮次（显示原始偏差，越大表示轮次晚）
+            if data["actual_leader_games"] > 0:
+                leader_round = data["actual_leader_total_rounds"] / data["actual_leader_games"]
+                raw_score = (leader_round - persuasion_stats['leader_rounds']['mean']) / persuasion_stats['leader_rounds']['std']
+                scores['leader'] = -raw_score  # 在计算总分时反转
+                print(f"  被选为队长时平均在第{leader_round:.1f}轮, {raw_score:+.2f}σ")
+            
+            # 计算总分（考虑指标方向）
+            valid_scores = [score for score in scores.values() if score != 0]
+            if valid_scores:
+                total_score = sum(valid_scores) / len(valid_scores)
+                print(f"  说服力/欺骗性总分: {total_score:+.2f}σ")
+            
+            # API稳定性表现
+            print(f"  \n  API稳定性表现：")
+            print(f"  输出不合规统计: 总计{data['total_fails']}次, 平均每局{avg_fails:.2f}次")
+
+            # 计算API稳定性得分
+            api_scores = {}
+            if data["total_fails"] > 0:
+                error_rate = data["total_api_calls"] / data["total_fails"]
+                raw_score = (error_rate - api_stats['error_rates']['mean']) / api_stats['error_rates']['std']
+                api_scores['error_rate'] = raw_score  # 正向指标，不需要反转
+                print(f"  平均每{error_rate:.1f}次API调用出现一次不合规, {raw_score:+.2f}σ")
+            else:
+                print("  从未出现不合规输出")
+
+            # 计算API稳定性总分
+            if api_scores:
+                api_total_score = sum(api_scores.values()) / len(api_scores.values())
+                print(f"  API稳定性总分: {api_total_score:+.2f}σ")
+
+            # 在所有计算和打印完成后，收集四个维度的总分
+            dimension_scores = {}
+            
+            # 1. 胜率总分
+            if winrate_scores:
+                dimension_scores['winrate_total'] = winrate_total_score
+            
+            # 2. 逻辑推理总分
+            dimension_scores['logic_total'] = total_score  # 来自 _calculate_logic_score
+            
+            # 3. 说服力总分
+            if valid_scores:
+                dimension_scores['persuasion_total'] = total_score  # 来自说服力计算
+            
+            # 4. API稳定性总分
+            if api_scores:
+                dimension_scores['api_total'] = api_total_score  # 来自API稳定性计算
+            
+            # 在所有打印完成后绘制雷达图
+            self.plot_player_radar(pid, dimension_scores)
+
+    def _get_level_description(self, score: float) -> str:
+        """根据标准分获取水平描述"""
+        if score > 10:
+            return "显著高于平均水平"
+        elif score > 5:
+            return "中上水平"
+        elif score > -5:
+            return "接近平均水平"
+        elif score > -10:
+            return "略低于平均水平"
+        else:
+            return "明显低于平均水平"
+
+    def plot_player_radar(self, pid: str, scores: dict):
+        """为单个玩家绘制雷达图"""
+        # 使用默认字体
+        plt.rcParams['axes.unicode_minus'] = False
+        
+        # 创建图表，调整大小和布局
+        fig = plt.figure(figsize=(6, 7))  # 增加高度留出标题空间
+        ax = fig.add_subplot(111, polar=True)
+        plt.subplots_adjust(top=0.85)  # 调整子图位置，给标题留出更多空间
+        
+        # 准备数据
+        categories = ['Win Rate', 'Logic', 'Persuasion', 'API Stability']
+        values = [
+            scores.get('winrate_total', 0),    # 胜率总分
+            scores.get('logic_total', 0),      # 逻辑推理总分
+            scores.get('persuasion_total', 0), # 说服力总分
+            scores.get('api_total', 0)         # API稳定性总分
+        ]
+        
+        # 设置角度
+        angles = np.linspace(0, 2*np.pi, len(categories), endpoint=False)
+        values = np.concatenate((values, [values[0]]))  # 闭合图形
+        angles = np.concatenate((angles, [angles[0]]))  # 闭合图形
+        
+        # 绘制雷达图
+        ax.plot(angles, values)
+        ax.fill(angles, values, alpha=0.25)
+        
+        # 设置刻度，改为±1.5σ
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories)
+        ax.set_ylim(-1.5, 1.5)  # 修改为±1.5σ
+        ax.set_yticks([-1.5, -1.0, -0.5, 0, 0.5, 1.0, 1.5])  # 调整刻度标记
+        
+        # 添加标题
+        plt.title(f'Player {pid} Performance', pad=20)
+        
+        # 保存图片
+        plt.savefig(f'player_{pid}_radar.png')
+        plt.close()
+
 def create_app():
     """创建一个临时的 Flask 应用来初始化数据库连接"""
     app = Flask(__name__)
@@ -199,10 +1083,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='分析 Avalon 游戏数据')
     parser.add_argument('start_id', type=int, help='起始游戏 ID')
     parser.add_argument('end_id', type=int, help='结束游戏 ID')
+    parser.add_argument('--mode', choices=['basic', 'model'], default='basic',
+                      help='分析模式: basic-基础分析, model-模型表现分析')
     args = parser.parse_args()
     
     app = create_app()
     with app.app_context():
         analyzer = GameAnalyzer()
-        results = analyzer.analyze_games(args.start_id, args.end_id)
-        analyzer.print_analysis(results) 
+        if args.mode == 'basic':
+            results = analyzer.analyze_games(args.start_id, args.end_id)
+            analyzer.print_analysis(results)
+        else:
+            results = analyzer.analyze_model_performance(args.start_id, args.end_id)
+            analyzer.print_model_analysis(results) 

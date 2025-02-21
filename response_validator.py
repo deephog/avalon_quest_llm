@@ -1,28 +1,35 @@
 from jsonschema import validate
 from jsonschema.exceptions import ValidationError
+import re
 
 SCHEMA = {
     "common": {
         "type": "object",
         "properties": {
-            "summary": {"type": "string"},
-            "next_speech": {"type": "string"},
-            "mission_vote": {
-                "type": "object",
-                "properties": {
-                    "1": {"enum": ["success", "failure"]},
-                    "2": {"enum": ["success", "failure"]}
-                },
-                "required": ["1", "2"]
+            "summary": {
+                "type": "string",
+                "minLength": 50,  # 至少50字分析
+                "maxLength": 5000  # 最多500字
+            },
+            "next_speech": {
+                "type": "string",
+                "minLength": 50,
+                "maxLength": 5000
             },
             "guess": {
                 "type": "object",
                 "patternProperties": {
-                    "^P[1-5]$": {"enum": ["red", "blue", "unknown"]}
-                }
+                    "^P[1-5]$": {
+                        "enum": ["red", "blue", "unknown"],
+                        "description": "必须为red/blue/unknown"
+                    }
+                },
+                "additionalProperties": False,  # 禁止额外属性
+                "minProperties": 4  # 必须猜测至少4个玩家
             }
         },
-        "required": ["summary", "next_speech", "mission_vote"]
+        "required": ["summary", "next_speech", "guess"],
+        "additionalProperties": False  # 禁止响应中出现未定义字段
     },
     "leader": {
         "type": "object",
@@ -60,4 +67,12 @@ class ResponseValidator:
             return False
         except KeyError:
             print(f"未知的验证模式: {schema_type}")
-            return False 
+            return False
+
+    def validate_common_response(self, data: dict) -> bool:
+        """自定义普通响应验证逻辑"""
+        # 基础模式验证
+        if not self.validate(data, "common"):
+            return False
+        
+        return True 

@@ -289,7 +289,7 @@ def export_data(format):
 
             # 玩家信息
             players_df = pd.read_sql("""
-                SELECT game_id, player_id, role, is_ai, character, strategy, team_mates, morgan
+                SELECT game_id, player_id, role, is_ai, character, strategy, team_mates, morgan, user_id
                 FROM game_player
             """, engine)
             players_df.to_excel(writer, sheet_name='Players', index=False)
