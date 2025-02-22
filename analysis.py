@@ -237,7 +237,7 @@ class GameAnalyzer:
                 "red_epic_fails": 0,        # 作为红方队长时的致命失误次数
                 "red_early_inactive": 0,     # 作为红方时前两轮未参与任务的次数
                 "red_early_suspects": 0,     # 前两轮未参与时被蓝方玩家猜测为红方的总人次
-                "red_mistaken_as_blue": 0,  # 作为红方被误判为蓝方的总人次（猜测为蓝方或unknown）
+                "red_mistaken_as_blue": 0,  # 作为红方被误认为蓝方的总人轮次
                 "red_undetected": 0,  # 作为红方未被蓝方玩家识破的总人次（猜测为蓝方或unknown）
                 "first_selected_total_rounds": 0,  # 首次被蓝方队长选中的总轮次
                 "first_selected_games": 0,         # 被蓝方队长选中过的游戏数
@@ -254,6 +254,17 @@ class GameAnalyzer:
                 "red_leader_success": 0,  # 作为红方队长任务成功的次数
                 "actual_leader_total_rounds": 0,  # 实际被选为队长的总轮次
                 "actual_leader_games": 0,         # 实际被选为队长的游戏数
+                "red_teammates": {},  # 新增：初始化红方队友统计
+                "morgan": 0,         # 记录摩根次数
+                "red_nonstart_leader_rounds": 0,  # 新增：非首轮队长的轮次总和
+                "red_nonstart_leader_count": 0,   # 新增：非首轮队长次数
+                "red_nonstart_games": 0,          # 新增：非首轮队长的游戏数
+                "red_second_round_leader_from_blue": 0,  # 新增：由蓝方交接的第二轮队长次数
+                "red_third_round_leader_from_blue": 0,   # 新增：由蓝方交接的第三轮队长次数
+                "blue_correctly_identified": 0,  # 作为蓝方被其他蓝方正确识别的总人次
+                "blue_correctly_identified_round": 0,  # 作为蓝方被其他蓝方正确识别的总人轮次
+                "total_blue_players_sum": 0,     # 新增：统计遇到的蓝方玩家总数
+                "total_blue_players_games": 0,   # 新增：统计有效局数
             }
         
         # 统计每个位置的表现
@@ -578,7 +589,140 @@ class GameAnalyzer:
                     # 记录实际被选为队长的情况
                     stats[current_leader.player_id]["actual_leader_total_rounds"] += current_round
                     stats[current_leader.player_id]["actual_leader_games"] += 1
-        
+            
+            # 如果是红方玩家，统计队友
+            for player in players:
+                pid = player.player_id
+                if player.role == "red":
+                    # 找出该局游戏中的其他红方玩家
+                    red_teammates = [p for p in players if p.role == "red" and p.player_id != pid]
+
+                    for teammate in red_teammates:
+                        if teammate.player_id not in stats[pid]["red_teammates"]:
+                            stats[pid]["red_teammates"][teammate.player_id] = 0
+                        stats[pid]["red_teammates"][teammate.player_id] += 1
+                    
+                    if 'morgan' not in stats[pid]:
+                        stats[pid]["morgan"] = 0
+                    if player.morgan:
+                        stats[pid]["morgan"] += 1
+
+            # 获取第一轮队长
+            first_round_leader = rounds[0].leader_id if rounds else None
+            
+            # 记录每个红方玩家在这局是否已经当过队长
+            red_leader_in_game = {p.player_id: False for p in players if p.role == "red"}
+            
+            # 遍历每一轮
+            for round_num, game_round in enumerate(rounds, 1):
+                leader_id = game_round.leader_id
+                leader_player = next((p for p in players if p.player_id == leader_id), None)
+                
+                if not leader_player or leader_player.role != "red":
+                    continue
+                    
+                # 如果是红方队长且不是第一轮
+                if leader_id != first_round_leader:
+                    stats[leader_id]["red_nonstart_leader_rounds"] += round_num
+                    stats[leader_id]["red_nonstart_leader_count"] += 1
+                    red_leader_in_game[leader_id] = True
+                    
+                    # 获取上一轮队长信息
+                    if round_num > 1:
+                        prev_round = rounds[round_num - 2]  # round_num从1开始，所以这里是-2
+                        prev_leader = next((p for p in players if p.player_id == prev_round.leader_id), None)
+                        
+                        # 如果上一轮是蓝方队长
+                        if prev_leader and prev_leader.role == "blue":
+                            # 统计第二轮和第三轮队长
+                            if round_num == 2:
+                                stats[leader_id]["red_second_round_leader_from_blue"] += 1
+                            elif round_num == 3:
+                                stats[leader_id]["red_third_round_leader_from_blue"] += 1
+            
+            # 在每局结束时，更新非首轮队长的游戏计数
+            for pid in red_leader_in_game:
+                if pid != first_round_leader:
+                    stats[pid]["red_nonstart_games"] += 1
+
+            # 对每个蓝方玩家，统计被其他蓝方玩家正确识别的情况
+            for player in players:
+                if player.role != "blue":  # 只统计蓝方玩家
+                    continue
+                    
+                correctly_identified = 0
+                # 检查每个其他蓝方玩家的猜测
+                for guesser in players:
+                    if guesser.role != "blue" or guesser.player_id == player.player_id:  # 排除自己和非蓝方玩家
+                        continue
+                        
+                    # 找到这个蓝方玩家对当前玩家的猜测
+                    guess = next(
+                        (g for g in all_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
+                        None
+                    )
+                    
+                    # 如果明确猜测为蓝方，计入正确识别
+                    if guess and guess.guessed_role.lower() == "blue":
+                        correctly_identified += 1
+                
+                # 累加统计数据
+                stats[player.player_id]["blue_correctly_identified"] += correctly_identified
+            
+            # 统计最后一轮的总人次（保持原有统计）
+            if last_round:
+                last_round_guesses = IdentityGuess.query.filter_by(round_id=last_round.id).all()
+                correctly_identified = 0
+                for guesser in players:
+                    if guesser.role != "blue" or guesser.player_id == player.player_id:
+                        continue
+                        
+                    guess = next(
+                        (g for g in last_round_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
+                        None
+                    )
+                    
+                    if guess and guess.guessed_role.lower() == "blue":
+                        correctly_identified += 1
+                
+                stats[player.player_id]["blue_correctly_identified_round"] += correctly_identified
+
+            # 计算本局蓝方玩家数量
+            blue_players_count = sum(1 for p in players if p.role == "blue")
+            
+            # 更新蓝方玩家数量统计
+            if role == "red":
+                stats[pid]["total_blue_players_sum"] += blue_players_count
+                stats[pid]["total_blue_players_games"] += 1
+            elif role == "blue":
+                stats[pid]["total_blue_players_sum"] += (blue_players_count - 1)  # 减去自己
+                stats[pid]["total_blue_players_games"] += 1
+
+            # 对每个红方玩家，统计每一轮被误认为蓝方的情况
+            for player in players:
+                if player.role != "red":
+                    continue
+                
+                # 遍历每一轮
+                for game_round in rounds:
+                    # 获取该轮的猜测数据
+                    round_guesses = IdentityGuess.query.filter_by(round_id=game_round.id).all()
+                    
+                    # 检查每个蓝方玩家在这一轮的猜测
+                    for guesser in players:
+                        if guesser.role != "blue":  # 只看蓝方玩家的猜测
+                            continue
+                        
+                        # 找到这个蓝方玩家在这一轮对该红方玩家的猜测
+                        guess = next(
+                            (g for g in round_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
+                            None
+                        )
+                        
+                        # 如果在这一轮明确猜测为蓝方，计入误判
+                        if guess and guess.guessed_role.lower() == "blue":
+                            stats[player.player_id]["red_mistaken_as_blue"] += 1
+
         # 计算全局基准胜率
         total_red_games = sum(data["red_games"] for data in stats.values())
         total_red_wins = sum(data["red_wins"] for data in stats.values())
@@ -1016,6 +1160,49 @@ class GameAnalyzer:
             # 在所有打印完成后绘制雷达图
             self.plot_player_radar(pid, dimension_scores)
 
+            # 在所有现有输出后添加红方队友统计
+            print("\n  红方队友统计:")
+            teammates = data["red_teammates"]
+            morgan = data["morgan"]
+            if teammates:
+                # 按次数排序
+                sorted_teammates = sorted(teammates.items(), key=lambda x: x[1], reverse=True)
+                for teammate_id, count in sorted_teammates:
+                    print(f"    • 与 {teammate_id} 同队 {count} 次")
+            else:
+                print("    从未作为红方")
+            
+            if morgan:
+                print(f"    • 作为红方时，有 {morgan} 次随机到Morgan")
+
+            # 在红方队友统计后添加非首轮队长统计
+            if data["red_nonstart_games"] > 0:
+                leader_count = data["red_nonstart_leader_count"]
+                avg_round = data["red_nonstart_leader_rounds"] / leader_count if leader_count > 0 else 0
+                leader_rate = (leader_count / data["red_nonstart_games"]) * 100
+                print(f"    • 作为红方时，除去第一轮随机为队长的局，在剩下的 {data['red_nonstart_games']} 局中:")
+                if leader_count > 0:
+                    print(f"      - 成为队长 {leader_count} 次 ({leader_rate:.1f}%)")
+                    print(f"      - 平均在第 {avg_round:.1f} 轮成为队长")
+                    # 显示由蓝方交接的第二轮和第三轮队长统计
+                    second_round_rate = (data["red_second_round_leader_from_blue"] / data["red_nonstart_games"]) * 100
+                    third_round_rate = (data["red_third_round_leader_from_blue"] / data["red_nonstart_games"]) * 100
+                    print(f"      - 由蓝方交接的第二轮队长 {data['red_second_round_leader_from_blue']} 次 ({second_round_rate:.1f}%)")
+                    print(f"      - 由蓝方交接的第三轮队长 {data['red_third_round_leader_from_blue']} 次 ({third_round_rate:.1f}%)")
+                else:
+                    print("      - 从未成为队长")
+
+            # 在红方队友统计前添加身份识别统计
+            if data["red_games"] > 0:
+                avg_mistaken = data["red_mistaken_as_blue"] / data["red_games"]
+                print(f"    • 作为红方时，平均每局被 {avg_mistaken:.1f} 个蓝方玩家误认为蓝方 (总计 {data['red_mistaken_as_blue']} 人轮次)")
+            
+            if data["blue_games"] > 0:
+                avg_identified = data["blue_correctly_identified"] / data["blue_games"]
+                avg_identified_round = data["blue_correctly_identified_round"] / data["blue_games"]
+                print(f"    • 作为蓝方时，平均每局被 {avg_identified:.1f} 个其他蓝方玩家正确识别为蓝方 "
+                      f"(总计 {data['blue_correctly_identified']} 人次, {data['blue_correctly_identified_round']} 人轮次)")
+
     def _get_level_description(self, score: float) -> str:
         """根据标准分获取水平描述"""
         if score > 10:
@@ -1031,7 +1218,9 @@ class GameAnalyzer:
 
     def plot_player_radar(self, pid: str, scores: dict):
         """为单个玩家绘制雷达图"""
-        # 使用默认字体
+        # 使用更基础的字体设置
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.sans-serif'] = ['DejaVu Sans']  # 只使用通用字体
         plt.rcParams['axes.unicode_minus'] = False
         
         # 创建图表，调整大小和布局
@@ -1048,10 +1237,13 @@ class GameAnalyzer:
             scores.get('api_total', 0)         # API稳定性总分
         ]
         
+        # 不再限制值的范围，让它可以超出圆圈
+        # values = [max(min(v, 2), -2) for v in values]
+        
         # 设置角度
         angles = np.linspace(0, 2*np.pi, len(categories), endpoint=False)
-        values = np.concatenate((values, [values[0]]))  # 闭合图形
-        angles = np.concatenate((angles, [angles[0]]))  # 闭合图形
+        values = np.concatenate((values, [values[0]]))
+        angles = np.concatenate((angles, [angles[0]]))
         
         # 绘制雷达图
         ax.plot(angles, values)

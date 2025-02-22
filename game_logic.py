@@ -86,7 +86,7 @@ class Player:
         self.generate_fails = 0
         
         self.team_mates = []  # 初始化为空列表，等待角色分配后设置
-        
+
         # 初始化猜测表
         self.guess = {f"P{i}": "unknown" for i in range(1, 6) if f"P{i}" != self.id}
         
@@ -374,7 +374,7 @@ class Player:
                     All players: P1 P2 P3 P4 P5
                     
                     Recent information and chat history:
-                    {self._get_current_memory()}
+                                {self._get_current_memory()}
 
                     Game rules review:
                     {self.rules_text}
@@ -425,7 +425,7 @@ class Player:
                         场上所有玩家：P1 P2 P3 P4 P5
 
                         最近信息与对话记录，如果是第一轮，则玩家聊天记录为空：
-                        {self._get_current_memory()}
+                    {self._get_current_memory()}
 
                         游戏规则回顾：
                         {self.rules_text}
@@ -570,7 +570,7 @@ class Player:
                     response = llm([HumanMessage(content=prompt)]).get("content", "")
                 else:
                     response = llm([HumanMessage(content=prompt)]).content
-                
+
                 if self.process_response(response, is_leader):
                     if not is_leader:
                         break
@@ -1140,7 +1140,7 @@ class AvalonSimulator:
         except Exception as e:
             print(f"Error saving round data (part 2): {e}")
             db.session.rollback()
-        
+
         self.round += 1
         
         # 清除魔法指示物
