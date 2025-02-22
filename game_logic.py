@@ -693,7 +693,7 @@ class Player:
                 team_mates = [p for p in available_players if p.id in self.team_mates]
                 if team_mates:
                     return random.choice(team_mates).id
-            
+        
             # 随机选择一个非队友玩家
             non_team_players = [p for p in available_players if p.id not in self.team_mates]
             if non_team_players:

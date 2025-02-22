@@ -238,6 +238,7 @@ class GameAnalyzer:
                 "red_early_inactive": 0,     # 作为红方时前两轮未参与任务的次数
                 "red_early_suspects": 0,     # 前两轮未参与时被蓝方玩家猜测为红方的总人次
                 "red_mistaken_as_blue": 0,  # 作为红方被误认为蓝方的总人轮次
+                "red_identified_as_red": 0,  # 作为红方被对手正确识别的总人次
                 "red_undetected": 0,  # 作为红方未被蓝方玩家识破的总人次（猜测为蓝方或unknown）
                 "first_selected_total_rounds": 0,  # 首次被蓝方队长选中的总轮次
                 "first_selected_games": 0,         # 被蓝方队长选中过的游戏数
@@ -265,6 +266,21 @@ class GameAnalyzer:
                 "blue_correctly_identified_round": 0,  # 作为蓝方被其他蓝方正确识别的总人轮次
                 "total_blue_players_sum": 0,     # 新增：统计遇到的蓝方玩家总数
                 "total_blue_players_games": 0,   # 新增：统计有效局数
+                "red_leader_count": 0,  # 作为红方时成为队长的次数
+                "blue_leader_count": 0,  # 作为蓝方时成为队长的次数
+                "red_first_round_leader": 0,  # 作为红方时第一轮随机到队长的次数
+                "blue_first_round_leader": 0,  # 作为蓝方时第一轮随机到队长的次数
+                "red_three_success": 0,  # 作为红方时赢得3次任务的局数
+                "red_three_success_failed": 0,  # 作为红方时赢得3次任务但最终被翻盘的局数
+                # 为每个统计指标添加队友维度
+                "red_mistaken_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下被误认为蓝方的次数
+                "red_identified_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下被对手正确识别为红方的次数
+                "blue_correctly_identified_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下被其他蓝方正确识别为蓝方的次数
+                "red_games_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},     # 与每个队友一起玩的红方局数
+                "red_leader_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},    # 每个队友情况下成为队长的次数
+                "red_first_leader_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下第一轮随机到队长的次数
+                "red_three_success_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下赢得3次任务的次数
+                "red_three_success_failed_by_teammate": {f"P{j}": 0 for j in range(1, 6) if j != i},  # 每个队友情况下被翻盘的次数
             }
         
         # 统计每个位置的表现
@@ -457,32 +473,6 @@ class GameAnalyzer:
                 stats[pid]["total_fails"] += fails
                 stats[pid]["total_api_calls"] += (rounds_count + 1)
                 
-                # 如果是红方玩家，统计未被识破和误判情况
-                if role == "red":  # 移除 winner == "red" 条件
-                    undetected_count = 0  # 记录未识破的蓝方玩家数量
-                    mistaken_count = 0    # 记录误判为蓝方的蓝方玩家数量
-                    
-                    # 检查每个蓝方玩家的猜测
-                    for guesser in players:
-                        if guesser.role != "blue":  # 只看蓝方玩家的猜测
-                            continue
-                            
-                        # 找到这个蓝方玩家对该红方玩家的猜测
-                        player_guess = next(
-                            (g for g in all_guesses if g.guesser_id == guesser.player_id and g.target_id == pid),
-                            None
-                        )
-                        
-                        # 统计未识破（没有猜测或猜测不是red）
-                        if not player_guess or player_guess.guessed_role.lower() != "red":
-                            undetected_count += 1
-                            # 如果明确猜测为蓝方，计入误判
-                            if player_guess and player_guess.guessed_role.lower() == "blue":
-                                mistaken_count += 1
-                    
-                    # 累加统计数据
-                    stats[pid]["red_undetected"] += undetected_count
-                    stats[pid]["red_mistaken_as_blue"] += mistaken_count
             
             # 获取每一轮的数据并统计
             rounds = GameRound.query.filter_by(game_id=game.id).order_by(GameRound.id).all()
@@ -646,46 +636,38 @@ class GameAnalyzer:
                     stats[pid]["red_nonstart_games"] += 1
 
             # 对每个蓝方玩家，统计被其他蓝方玩家正确识别的情况
+            blue_team = [p.player_id for p in players if p.role == "blue"]
+                
+            # 遍历每个蓝方玩家  
             for player in players:
                 if player.role != "blue":  # 只统计蓝方玩家
                     continue
                     
                 correctly_identified = 0
+
+                for game_round in rounds:
+                    round_guesses = IdentityGuess.query.filter_by(round_id=game_round.id).all()
                 # 检查每个其他蓝方玩家的猜测
-                for guesser in players:
-                    if guesser.role != "blue" or guesser.player_id == player.player_id:  # 排除自己和非蓝方玩家
-                        continue
+                    for guesser in players:
+                        if guesser.role != "blue" or guesser.player_id == player.player_id:  # 排除自己和非蓝方玩家
+                            continue
                         
-                    # 找到这个蓝方玩家对当前玩家的猜测
-                    guess = next(
-                        (g for g in all_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
-                        None
-                    )
-                    
-                    # 如果明确猜测为蓝方，计入正确识别
-                    if guess and guess.guessed_role.lower() == "blue":
-                        correctly_identified += 1
+                        # 找到这个蓝方玩家对当前玩家的猜测
+                        guess = next(
+                            (g for g in round_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
+                            None
+                        )               
+                        # 如果明确猜测为蓝方，计入正确识别
+                        if guess and guess.guessed_role.lower() == "blue":
+                            correctly_identified += 1
+                        
+                        for blue_player in blue_team:
+                            if (blue_player != player.player_id) and (blue_player != guesser.player_id):
+                                stats[player.player_id]["blue_correctly_identified_by_teammate"][blue_player] += 1
                 
                 # 累加统计数据
                 stats[player.player_id]["blue_correctly_identified"] += correctly_identified
             
-            # 统计最后一轮的总人次（保持原有统计）
-            if last_round:
-                last_round_guesses = IdentityGuess.query.filter_by(round_id=last_round.id).all()
-                correctly_identified = 0
-                for guesser in players:
-                    if guesser.role != "blue" or guesser.player_id == player.player_id:
-                        continue
-                        
-                    guess = next(
-                        (g for g in last_round_guesses if g.guesser_id == guesser.player_id and g.target_id == player.player_id),
-                        None
-                    )
-                    
-                    if guess and guess.guessed_role.lower() == "blue":
-                        correctly_identified += 1
-                
-                stats[player.player_id]["blue_correctly_identified_round"] += correctly_identified
 
             # 计算本局蓝方玩家数量
             blue_players_count = sum(1 for p in players if p.role == "blue")
@@ -700,6 +682,7 @@ class GameAnalyzer:
 
             # 对每个红方玩家，统计每一轮被误认为蓝方的情况
             for player in players:
+                teammate = player.team_mates
                 if player.role != "red":
                     continue
                 
@@ -722,6 +705,35 @@ class GameAnalyzer:
                         # 如果在这一轮明确猜测为蓝方，计入误判
                         if guess and guess.guessed_role.lower() == "blue":
                             stats[player.player_id]["red_mistaken_as_blue"] += 1
+                            stats[player.player_id]["red_mistaken_by_teammate"][teammate] += 1
+                        if guess and guess.guessed_role.lower() == "red":
+                            stats[player.player_id]["red_identified_as_red"] += 1
+                            stats[player.player_id]["red_identified_by_teammate"][teammate] += 1
+            # 获取第一轮数据
+            if rounds:
+                first_round = rounds[0]
+                first_round_leader = next((p for p in players if p.player_id == first_round.leader_id), None)
+                
+                # 统计第一轮队长
+                if first_round_leader:
+                    if first_round_leader.role == "red":
+                        stats[first_round_leader.player_id]["red_first_round_leader"] += 1
+                    else:  # blue
+                        stats[first_round_leader.player_id]["blue_first_round_leader"] += 1
+
+            # 统计本局红方赢得的任务次数
+
+            red_success_count = sum(1 for r in game.rounds if r.result == "fail")
+            
+            # 如果红方赢得3次或以上任务
+            if red_success_count >= 3:
+                # 统计每个红方玩家
+                for player in players:
+                    if player.role == "red":
+                        stats[player.player_id]["red_three_success"] += 1
+                        # 如果最终蓝方胜利，说明被翻盘
+                        if game.winner == "blue":
+                                stats[player.player_id]["red_three_success_failed"] += 1
 
         # 计算全局基准胜率
         total_red_games = sum(data["red_games"] for data in stats.values())
@@ -976,7 +988,6 @@ class GameAnalyzer:
         winrate_stats = self._calculate_winrate_stats(stats)  # 添加胜率统计
         
         for pid, data in sorted_players:
-            total_wr = (data["total_wins"] / data["total_games"] * 100) if data["total_games"] > 0 else 0
             red_wr = (data["red_wins"] / data["red_games"] * 100) if data["red_games"] > 0 else 0
             blue_wr = (data["blue_wins"] / data["blue_games"] * 100) if data["blue_games"] > 0 else 0
             guess_rate = (data["perfect_guesses"] / data["blue_games"] * 100) if data["blue_games"] > 0 else 0
@@ -984,27 +995,7 @@ class GameAnalyzer:
             # 计算个人的API调用错误率
             avg_fails = data["total_fails"] / data["total_games"] if data["total_games"] > 0 else 0
             
-            # 计算平均被选中频率
-            blue_selection_rate = (data["blue_leader_rounds"] / data["selected_by_blue"]) if data["selected_by_blue"] > 0 else float('inf')
-            red_selection_rate = (data["red_leader_rounds"] / data["selected_by_red"]) if data["selected_by_red"] > 0 else float('inf')
-            
-            # 计算红方玩家平均每局参与失败任务数
-            avg_failed_missions = (data["red_failed_missions"] / data["red_games"]) if data["red_games"] > 0 else 0
-            
-            # 计算魔法指示物命中率
-            amulet_hit_rate = (data["amulet_red_hits"] / data["blue_leader_count"] * 100) if data["blue_leader_count"] > 0 else 0
-            
-            # 计算蓝方队长任务失败率
-            blue_leader_fail_rate = (data["blue_leader_fails"] / data["blue_leader_count"] * 100) if data["blue_leader_count"] > 0 else 0
-            
-            # 计算红方队长致命失误率
-            red_epic_fail_rate = (data["red_epic_fails"] / data["red_leader_count"] * 100) if data["red_leader_count"] > 0 else 0
-            
-            # 计算平均被怀疑人数
-            avg_suspects = (data["red_early_suspects"] / data["red_early_inactive"]) if data["red_early_inactive"] > 0 else 0
-            
             # 计算平均每局未被识破和误判人数（使用所有红方局数）
-            avg_undetected = (data["red_undetected"] / data["red_games"]) if data["red_games"] > 0 else 0
             avg_mistaken = (data["red_mistaken_as_blue"] / data["red_games"]) if data["red_games"] > 0 else 0
             
             # 修改平均首次被选中轮次的计算
@@ -1013,15 +1004,11 @@ class GameAnalyzer:
                 data["first_selected_total_rounds"] = 5  # 设为第5轮
                 data["first_selected_games"] = 1         # 设为1次，避免除以0
             
-            avg_first_selected = data["first_selected_total_rounds"] / data["first_selected_games"]
-            
             # 修改平均首次被选为队长轮次的计算
             # 如果从未被选为队长，就当作是第5轮
             if data["first_leader_games"] == 0:
                 data["first_leader_total_rounds"] = 5  # 设为第5轮
                 data["first_leader_games"] = 1         # 设为1次，避免除以0
-            
-            avg_first_leader_all = data["first_leader_total_rounds"] / data["first_leader_games"]
             
             print(f"\n位置 {pid}:")
             print(f"  总体胜率表现：")
@@ -1093,12 +1080,12 @@ class GameAnalyzer:
                 scores['fail'] = raw_score  # 正向指标，不需要反转
                 print(f"  作为红方参与失败任务: 总计{data['red_failed_missions']}次, 平均每局{fail_rate:.2f}次, {raw_score:+.2f}σ")
             
-            # 4. 未被识破人数（显示原始偏差，越大表示未被识破的人多）
-            if data["red_games"] > 0:
-                undetected = data["red_undetected"] / data["red_games"]
-                raw_score = (undetected - persuasion_stats['undetected_counts']['mean']) / persuasion_stats['undetected_counts']['std']
-                scores['undetected'] = raw_score  # 正向指标，不需要反转
-                print(f"  作为红方平均每局有{undetected:.1f}个蓝方玩家未识破身份, {raw_score:+.2f}σ")
+            # # 4. 未被识破人数（显示原始偏差，越大表示未被识破的人多）
+            # if data["red_games"] > 0:
+            #     undetected = data["red_undetected"] / data["red_games"]
+            #     raw_score = (undetected - persuasion_stats['undetected_counts']['mean']) / persuasion_stats['undetected_counts']['std']
+            #     scores['undetected'] = raw_score  # 正向指标，不需要反转
+            #     print(f"  作为红方平均每局有{undetected:.1f}个蓝方玩家未识破身份, {raw_score:+.2f}σ")
             
             # 5. 首次被带入任务轮次（显示原始偏差，越大表示轮次晚）
             if data["first_selected_games"] > 0:
@@ -1195,13 +1182,60 @@ class GameAnalyzer:
             # 在红方队友统计前添加身份识别统计
             if data["red_games"] > 0:
                 avg_mistaken = data["red_mistaken_as_blue"] / data["red_games"]
-                print(f"    • 作为红方时，平均每局被 {avg_mistaken:.1f} 个蓝方玩家误认为蓝方 (总计 {data['red_mistaken_as_blue']} 人轮次)")
+                avg_identified = data["red_identified_as_red"] / data["red_games"]
+                red_leader_rate = (data["red_leader_count"] / data["red_games"]) * 100
+                red_first_leader_rate = (data["red_first_round_leader"] / data["red_games"]) * 100
+                
+                # 计算除去第一轮随机到队长后的队长率
+                remaining_red_games = data["red_games"] - data["red_first_round_leader"]
+                remaining_red_leader = data["red_leader_count"] - data["red_first_round_leader"]
+                red_remaining_rate = (remaining_red_leader / remaining_red_games * 100) if remaining_red_games > 0 else 0
+                
+                print(f"    • 作为红方时，平均每局被蓝方玩家误认为蓝方{avg_mistaken:.1f}人次 (总计 {data['red_mistaken_as_blue']} 人次)")
+                 # 添加每个队友的分项统计
+                for teammate, mistaken_count in data["red_mistaken_by_teammate"].items():
+                    if teammates[teammate] > 0:  # 确保和这个队友一起玩过
+                        avg = mistaken_count / teammates[teammate]
+                        print(f"      - 与{teammate}为队友时: {avg:.1f}人次 (总计 {mistaken_count} 人次)")
+
+                print(f"    • 作为红方时，平均每局被蓝方玩家准确识别为红方{avg_identified:.1f}人次 (总计 {data['red_identified_as_red']} 人次)")
+                # 添加每个队友的分项统计
+                for teammate, identified_count in data["red_identified_by_teammate"].items():
+                    if teammates[teammate] > 0:  # 确保和这个队友一起玩过
+                        avg = identified_count / teammates[teammate]
+                        print(f"      - 与{teammate}为队友时: {avg:.1f}人次 (总计 {identified_count} 人次)")
+
+                print(f"    • 作为红方时，成为队长 {data['red_leader_count']} 次，队长率 {red_leader_rate:.1f}%")
+                print(f"    • 作为红方时，第一轮随机到队长 {data['red_first_round_leader']} 次，随机率 {red_first_leader_rate:.1f}%")
+                print(f"    • 作为红方时，除去第一轮随机到队长的局，在剩余 {remaining_red_games} 局中成为队长 {remaining_red_leader} 次，队长率 {red_remaining_rate:.1f}%")
+                
+               
             
             if data["blue_games"] > 0:
                 avg_identified = data["blue_correctly_identified"] / data["blue_games"]
-                avg_identified_round = data["blue_correctly_identified_round"] / data["blue_games"]
-                print(f"    • 作为蓝方时，平均每局被 {avg_identified:.1f} 个其他蓝方玩家正确识别为蓝方 "
-                      f"(总计 {data['blue_correctly_identified']} 人次, {data['blue_correctly_identified_round']} 人轮次)")
+                blue_leader_rate = (data["blue_leader_count"] / data["blue_games"]) * 100
+                blue_first_leader_rate = (data["blue_first_round_leader"] / data["blue_games"]) * 100
+                
+                # 计算除去第一轮随机到队长后的队长率
+                remaining_blue_games = data["blue_games"] - data["blue_first_round_leader"]
+                remaining_blue_leader = data["blue_leader_count"] - data["blue_first_round_leader"]
+                blue_remaining_rate = (remaining_blue_leader / remaining_blue_games * 100) if remaining_blue_games > 0 else 0
+                
+                print(f"    • 作为蓝方时，平均每局被其他蓝方玩家正确识别为蓝方{avg_identified:.1f}人次 "
+                      f"(总计 {data['blue_correctly_identified']} 人次)")
+                # 添加每个队友的分项统计
+                for teammate, identified_count in data["blue_correctly_identified_by_teammate"].items():
+                    #avg = identified_count / teammates[teammate]
+                    print(f"      - 与{teammate}为队友时: 总计 {identified_count} 人次")
+                print(f"    • 作为蓝方时，成为队长 {data['blue_leader_count']} 次，队长率 {blue_leader_rate:.1f}%")
+                print(f"    • 作为蓝方时，第一轮随机到队长 {data['blue_first_round_leader']} 次，随机率 {blue_first_leader_rate:.1f}%")
+                print(f"    • 作为蓝方时，除去第一轮随机到队长的局，在剩余 {remaining_blue_games} 局中成为队长 {remaining_blue_leader} 次，队长率 {blue_remaining_rate:.1f}%")
+
+            # 添加红方3次任务胜利和翻盘统计
+            if data["red_three_success"] > 0:
+                flip_rate = (data["red_three_success_failed"] / data["red_three_success"] * 100)
+                print(f"    • 作为红方时，赢得3次任务 {data['red_three_success']} 次，"
+                      f"其中 {data['red_three_success_failed']} 次被蓝方识破翻盘 (翻盘率 {flip_rate:.1f}%)")
 
     def _get_level_description(self, score: float) -> str:
         """根据标准分获取水平描述"""
